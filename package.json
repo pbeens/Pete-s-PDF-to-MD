@@ -1,0 +1,45 @@
+{
+  "name": "petes-pdf-to-md",
+  "version": "0.5.0",
+  "description": "Open-source utility to convert PDF documents to high-quality Markdown for AI workflows.",
+  "private": true,
+  "main": "electron/main.cjs",
+  "scripts": {
+    "phase1": "node ./scripts/phase1.js",
+    "gui": "electron ./electron/main.cjs",
+    "gui:dev": "electron ./electron/main.cjs",
+    "build:mac": "./scripts/build-mac.sh",
+    "build:win": "electron-builder --win nsis",
+    "release:prep": "./scripts/release-prep.sh"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "GPL-3.0-only",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^40.6.1",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.pbeens.petespdftomd",
+    "productName": "Pete's PDF to MD",
+    "directories": {
+      "buildResources": "docs"
+    },
+    "files": [
+      "app/**",
+      "electron/**",
+      "scripts/**",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "dmg": {
+      "artifactName": "Pete-s-PDF-to-MD-v${version}-macOS.${ext}"
+    }
+  }
+}

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pete's PDF to MD</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="title-wrap">
+        <h1>Pete's PDF to MD</h1>
+        <p>Outline + section workflow for AI-ready markdown</p>
+        <p id="buildStamp">Build: (loading)</p>
+      </div>
+      <div class="actions">
+        <button id="pickPdfBtn">Select PDF</button>
+        <button id="runBtn" class="primary" disabled>Run Conversion</button>
+        <button id="openOutputBtn" disabled>Open Output Folder</button>
+      </div>
+    </header>
+
+    <section class="status-row">
+      <div class="status-item status-input">
+        <span class="label">Input:</span>
+        <code id="inputPath">(none)</code>
+      </div>
+      <div class="status-item status-output">
+        <span class="label">Output Root:</span>
+        <code id="outputRootPath">(default)</code>
+        <button id="pickOutputBtn">Change</button>
+      </div>
+      <div class="status-item status-status">
+        <span class="label">Status:</span>
+        <span id="statusText">Idle</span>
+      </div>
+    </section>
+
+    <main id="mainLayout" class="layout">
+      <section id="outlinePanel" class="panel panel-outline">
+        <div class="panel-head">
+          <h2>Outline Preview</h2>
+          <button id="toggleOutlineBtn" type="button" title="Collapse outline panel">Collapse</button>
+        </div>
+        <pre id="outlinePreview" class="scroll-pane"></pre>
+      </section>
+
+      <section class="panel">
+        <h2>Sections</h2>
+        <ul id="sectionsList" class="scroll-pane list"></ul>
+      </section>
+
+      <section class="panel panel-content">
+        <div class="panel-head panel-head-content">
+          <h2>Section Content</h2>
+          <label class="checkbox-label">
+            <input id="renderMarkdownChk" type="checkbox" />
+            <span>Render Markdown</span>
+          </label>
+        </div>
+        <div id="sectionPath" class="path"></div>
+        <pre id="sectionContent" class="scroll-pane"></pre>
+        <div id="sectionContentRendered" class="scroll-pane rendered-pane" hidden></div>
+      </section>
+    </main>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

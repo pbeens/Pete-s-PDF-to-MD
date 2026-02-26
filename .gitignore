@@ -1,0 +1,17 @@
+# macOS metadata
+.DS_Store
+
+# Local test assets (PDFs and generated artifacts)
+test-data/**
+!test-data/
+!test-data/pdfs/
+!test-data/pdfs/.gitkeep
+
+# Generated outputs
+output/
+dist/
+
+# Node / npm
+node_modules/
+npm-debug.log*
+.npm/
