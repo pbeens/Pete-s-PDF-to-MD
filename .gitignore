@@ -19,3 +19,7 @@ npm-debug.log*
 # Python cache / bytecode
 __pycache__/
 *.py[cod]
+
+# Local-only tracking files
+prompts.md
+session-metrics.md

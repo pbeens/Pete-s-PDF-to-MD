@@ -68,21 +68,6 @@ Current priority:
 - extract a reliable heading outline from PDFs
 - use headings to split output into smaller sub-documents for LLM workflows
 
-## Testing PDFs
-
-Put sample PDFs in:
-
-- `test-data/pdfs/`
-
-These files are used for manual and automated conversion quality checks.
-
-## Prompt + Cost Tracking
-
-This repository tracks collaboration and usage in two files:
-
-- `prompts.md`: chronological prompt log
-- `session-metrics.md`: time and token/cost tracking per session
-
 ## Planning
 
 Implementation options and milestone plan:
