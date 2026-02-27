@@ -22,6 +22,43 @@ Install PyMuPDF:
 - macOS/Linux: `python3 -m pip install pymupdf`
 - Windows (PowerShell): `py -m pip install pymupdf`
 
+## Build From Source
+
+### macOS
+
+1. `npm install`
+2. `python3 -m pip install pymupdf`
+3. Run unpackaged app for development:
+   `npm run gui`
+4. Build release artifact (DMG):
+   `npm run release:prep -- --version 0.5.0 --build`
+
+Release artifact:
+
+- `dist/Pete-s-PDF-to-MD-v0.5.0-macOS.dmg`
+
+### Windows (PowerShell)
+
+1. `npm install`
+2. `py -m pip install pymupdf`
+3. Run unpackaged app for development:
+   `npm run gui`
+4. Build release installer:
+   `npm run build:win`
+
+Release artifact:
+
+- `dist/*.exe`
+
+Upload release artifacts to:
+
+- `https://github.com/pbeens/Pete-s-PDF-to-MD/releases`
+
+Build notes:
+
+- `dist/mac-arm64/*.app` is an intermediate output for macOS packaging.
+- Upload the `.dmg` from `dist/` for macOS releases.
+
 ## Project Status
 
 Early setup phase.
@@ -86,34 +123,7 @@ Files:
 2. `python3 -m pip install pymupdf`
 3. `npm run gui`
 
-### macOS DMG Build (Release Artifact)
-
-1. `npm install`
-2. `npm run release:prep -- --version 0.5.0 --build`
-3. Upload generated DMG from `dist/` to:
-   `https://github.com/pbeens/Pete-s-PDF-to-MD/releases`
-
-Expected artifact name:
-
-- `Pete-s-PDF-to-MD-v0.5.0-macOS.dmg`
-
-Note:
-
-- `dist/mac/*.app` is a normal intermediate artifact.
-- Upload the `.dmg` file from `dist/` to GitHub Releases.
-
-### Windows PC Build (Release Artifact)
-
-Run on a Windows machine (PowerShell):
-
-1. `npm install`
-2. `npm run build:win`
-3. Upload generated installer from `dist/` to:
-   `https://github.com/pbeens/Pete-s-PDF-to-MD/releases`
-
-Expected artifact type:
-
-- `dist/*.exe` (NSIS installer)
+For release packaging instructions, see **Build From Source** above.
 
 ### Windows Run (PowerShell)
 
@@ -139,6 +149,31 @@ Current GUI features:
 Notes:
 
 - The app now quits when the last window is closed (so terminal returns immediately).
+
+## Troubleshooting
+
+### "Could not open output folder ... Output directory not found"
+
+- The app now defaults to `~/Documents/Pete's PDF to MD Output`.
+- If the error appears, set Output Folder explicitly in the app, then run conversion once.
+
+### "Conversion failed ... spawn ENOTDIR"
+
+- This indicates an older packaged build.
+- Rebuild and reinstall using:
+  `npm run release:prep -- --version 0.5.0 --build`
+
+### "PyMuPDF is not installed"
+
+- Install PyMuPDF for the same Python interpreter used by the app:
+  `/opt/homebrew/bin/python3 -m pip install pymupdf`
+- If needed, launch the app from Terminal with:
+  `PDF_TO_MD_PYTHON=/opt/homebrew/bin/python3 open /Applications/Pete\\'s\\ PDF\\ to\\ MD.app`
+
+### "I only see a .app file after build"
+
+- `dist/mac-arm64/*.app` is an intermediate output.
+- Upload `dist/Pete-s-PDF-to-MD-v0.5.0-macOS.dmg` to GitHub Releases.
 
 ## License
 

@@ -71,24 +71,68 @@ function hasPyMuPDF(pythonBin) {
   return check.status === 0;
 }
 
+function findPythonCandidates() {
+  const candidates = [];
+  const seen = new Set();
+
+  const add = (value) => {
+    const item = String(value || '').trim();
+    if (!item || seen.has(item)) return;
+    seen.add(item);
+    candidates.push(item);
+  };
+
+  add(process.env.PDF_TO_MD_PYTHON);
+  add(process.env.PYTHON_BIN);
+  add('python3');
+  add('python');
+  add('/opt/homebrew/bin/python3');
+  add('/usr/local/bin/python3');
+  add('/opt/homebrew/bin/python');
+  add('/usr/local/bin/python');
+
+  return candidates.filter((bin) => commandExists(bin));
+}
+
 function resolveEngine(requested) {
   if (requested !== 'auto' && requested !== 'pymupdf') {
     throw new Error(`Unsupported engine: ${requested}`);
   }
 
-  const pythonBin = commandExists('python3') ? 'python3' : (commandExists('python', ['--version']) ? 'python' : '');
-  if (!pythonBin) {
+  const pythonCandidates = findPythonCandidates();
+  if (pythonCandidates.length === 0) {
     throw new Error('Python is required for Phase 1. Install Python 3 and try again.');
   }
 
   if (requested === 'pymupdf' || requested === 'auto') {
-    if (!hasPyMuPDF(pythonBin)) {
-      throw new Error('PyMuPDF is not installed. Install with: pip install pymupdf');
+    for (const pythonBin of pythonCandidates) {
+      if (hasPyMuPDF(pythonBin)) {
+        return { engine: 'pymupdf', pythonBin };
+      }
     }
-    return { engine: 'pymupdf', pythonBin };
+    const installHintBin = pythonCandidates[0];
+    throw new Error(
+      `PyMuPDF is not installed for detected Python interpreters (${pythonCandidates.join(', ')}). `
+      + `Install with: ${installHintBin} -m pip install pymupdf`
+    );
   }
 
   throw new Error('No compatible engine found.');
+}
+
+function resolveExtractScriptPath() {
+  const candidates = [
+    process.resourcesPath ? path.join(process.resourcesPath, 'app.asar.unpacked', 'scripts', 'extract_outline.py') : '',
+    path.join(__dirname, 'extract_outline.py'),
+    path.join(process.cwd(), 'scripts', 'extract_outline.py'),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return candidates[0] || '';
 }
 
 function run() {
@@ -117,7 +161,11 @@ function run() {
     process.exit(1);
   }
 
-  const scriptPath = path.join(process.cwd(), 'scripts', 'extract_outline.py');
+  const scriptPath = resolveExtractScriptPath();
+  if (!fs.existsSync(scriptPath)) {
+    console.error(`Extraction script not found: ${scriptPath}`);
+    process.exit(1);
+  }
   console.log(`PROGRESS: Running ${selected.engine} extraction`);
   const child = spawnSync(
     selected.pythonBin,

@@ -5,7 +5,6 @@ const fsp = require('node:fs/promises');
 const { spawn } = require('node:child_process');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
-const OUTPUT_ROOT = path.join(ROOT_DIR, 'output');
 const APP_STARTED_AT = new Date();
 const CONVERSION_PROGRESS_EVENT = 'conversion-progress';
 
@@ -32,9 +31,31 @@ function createWindow() {
   win.loadFile(path.join(ROOT_DIR, 'app', 'index.html'));
 }
 
+function getScriptsDir() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'app.asar.unpacked', 'scripts');
+  }
+  return path.join(ROOT_DIR, 'scripts');
+}
+
+function getConversionCwd() {
+  if (app.isPackaged) {
+    return app.getPath('documents');
+  }
+  return ROOT_DIR;
+}
+
+function getDefaultOutputRoot() {
+  return path.join(app.getPath('documents'), "Pete's PDF to MD Output");
+}
+
+function ensureDirectoryExists(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
 function normalizeOutputRoot(outputRootPath) {
   if (!outputRootPath) {
-    return OUTPUT_ROOT;
+    return getDefaultOutputRoot();
   }
   return path.resolve(outputRootPath);
 }
@@ -85,7 +106,7 @@ ipcMain.handle('pick-pdf', async () => {
 ipcMain.handle('pick-output-dir', async (_event, currentPath) => {
   const result = await dialog.showOpenDialog({
     title: 'Select Output Folder',
-    defaultPath: currentPath || OUTPUT_ROOT,
+    defaultPath: currentPath || getDefaultOutputRoot(),
     properties: ['openDirectory', 'createDirectory'],
   });
 
@@ -97,7 +118,9 @@ ipcMain.handle('pick-output-dir', async (_event, currentPath) => {
 });
 
 ipcMain.handle('get-default-output-root', async () => {
-  return { outputRoot: OUTPUT_ROOT };
+  const outputRoot = getDefaultOutputRoot();
+  ensureDirectoryExists(outputRoot);
+  return { outputRoot };
 });
 
 ipcMain.handle('get-app-meta', async () => {
@@ -113,9 +136,11 @@ ipcMain.handle('run-conversion', async (event, inputPdfPath, outputRootPath) => 
     throw new Error('Input PDF path is missing or invalid.');
   }
 
-  const scriptPath = path.join(ROOT_DIR, 'scripts', 'phase1.js');
+  const scriptPath = path.join(getScriptsDir(), 'phase1.js');
   const outputRoot = normalizeOutputRoot(outputRootPath);
+  ensureDirectoryExists(outputRoot);
   const outputDir = getOutputDirForInput(inputPdfPath, outputRoot);
+  const conversionCwd = getConversionCwd();
   const emitProgress = (message) => {
     event.sender.send(CONVERSION_PROGRESS_EVENT, { message: String(message || '') });
   };
@@ -126,7 +151,8 @@ ipcMain.handle('run-conversion', async (event, inputPdfPath, outputRootPath) => 
       process.execPath,
       [scriptPath, '--input', inputPdfPath, '--out-dir', outputRoot],
       {
-        cwd: ROOT_DIR,
+        cwd: conversionCwd,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
         stdio: ['ignore', 'pipe', 'pipe'],
       }
     );
@@ -295,11 +321,14 @@ ipcMain.handle('load-section', async (_event, inputPdfPath, outputRootPath, sect
 });
 
 ipcMain.handle('open-output-dir', async (_event, inputPdfPath, outputRootPath) => {
+  const outputRoot = normalizeOutputRoot(outputRootPath);
+  ensureDirectoryExists(outputRoot);
   const outputDir = getOutputDirForInput(inputPdfPath, outputRootPath);
-  if (!fs.existsSync(outputDir)) {
-    throw new Error('Output directory not found.');
+  const targetDir = fs.existsSync(outputDir) ? outputDir : outputRoot;
+  const openResult = await shell.openPath(targetDir);
+  if (openResult) {
+    throw new Error(openResult);
   }
-  await shell.openPath(outputDir);
   return { ok: true };
 });
 

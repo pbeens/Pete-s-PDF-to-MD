@@ -32,6 +32,9 @@
       "scripts/**",
       "package.json"
     ],
+    "asarUnpack": [
+      "scripts/**"
+    ],
     "mac": {
       "target": [
         "dmg"
