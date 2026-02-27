@@ -42,3 +42,9 @@ Once this is reliable on your sample PDFs, wire it into the Electron app as:
 1. Heading hierarchy is readable and mostly correct on at least 3 different PDFs.
 2. Split files preserve heading context and are <= configurable target size.
 3. Output is deterministic across repeated runs on same input.
+
+## UI To-Do
+
+1. Add right-click actions for each section item: "Open in folder" and "Open in default program".
+2. When selecting a different section, reset the section content pane scroll position to the top.
+3. v0.7.0: Add Shift-click multi-select in Sections and a merge action to combine selected sections into one merged output.

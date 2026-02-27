@@ -3,7 +3,6 @@ import argparse
 import json
 import math
 import re
-import shutil
 from pathlib import Path
 
 import fitz
@@ -187,24 +186,6 @@ def build_outline_heuristic(doc):
 
     outline.sort(key=lambda x: (x["page_start"], x.get("y0") if x.get("y0") is not None else 1e9, x["level"], x["title"].lower()))
     return outline
-
-
-def chunk_text(text: str, max_chars: int):
-    if len(text) <= max_chars:
-        return [text]
-    paragraphs = text.split("\n\n")
-    chunks = []
-    current = ""
-    for paragraph in paragraphs:
-        candidate = paragraph if not current else f"{current}\n\n{paragraph}"
-        if len(candidate) > max_chars and current:
-            chunks.append(current)
-            current = paragraph
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
-    return chunks
 
 
 def improve_readability(text: str) -> str:
@@ -402,6 +383,57 @@ def format_course_table_blocks(text: str) -> str:
     return replaced
 
 
+def remove_redundant_table_header_lines(text: str) -> str:
+    if "|" not in text:
+        return text
+    # Remove standalone table-header labels that were extracted as plain text
+    # above/between table blocks.
+    noise_re = re.compile(
+        r"(?im)(?:^|\n\n)Categories\s*\n\s*Level\s*1\s*\n\s*Level\s*2\s*\n\s*Level\s*3\s*\n\s*Level\s*4\s*(?=\n\n|\n\||$)"
+    )
+    cleaned = noise_re.sub("\n\n", text)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def remove_duplicate_markdown_table_headers(text: str) -> str:
+    lines = text.splitlines()
+    if not lines:
+        return text
+
+    header_line = "| Categories | Level 1 | Level 2 | Level 3 | Level 4 |"
+    sep_line = "|---|---|---|---|---|"
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        next_line = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if line == header_line and next_line == sep_line:
+            # Only drop header blocks that are duplicated inside an existing table.
+            # Keep headers that start a new table section after non-table text.
+            prev_nonempty = ""
+            for j in range(len(out) - 1, -1, -1):
+                probe = out[j].strip()
+                if probe:
+                    prev_nonempty = probe
+                    break
+
+            next_nonempty = ""
+            for j in range(i + 2, len(lines)):
+                probe = lines[j].strip()
+                if probe:
+                    next_nonempty = probe
+                    break
+
+            duplicated_inside_table = prev_nonempty.startswith("|") and next_nonempty.startswith("|")
+            if duplicated_inside_table:
+                i += 2
+                continue
+        out.append(lines[i])
+        i += 1
+
+    return "\n".join(out)
+
+
 def stitch_orphan_continuations(text: str) -> str:
     paragraphs = [p for p in text.split("\n\n") if p.strip()]
     if len(paragraphs) < 2:
@@ -493,37 +525,102 @@ def remove_orphan_markers_after_rebalance(sections: list[dict]) -> None:
         sections[i]["body"] = re.sub(r"\n{3,}", "\n\n", curr_body).strip() or "(No extractable text in this range.)"
 
 
-def page_blocks(page, y_min=None, y_max=None):
-    top = 0.0 if y_min is None else max(0.0, float(y_min) + 0.5)
-    bottom = float(page.rect.height) if y_max is None else float(y_max)
-    if bottom <= top:
-        return []
+def markdown_table_from_rows(rows: list[list[str]]) -> str:
+    if not rows:
+        return ""
+    col_count = max((len(row) for row in rows), default=0)
+    if col_count < 2:
+        return ""
 
-    payload = page.get_text("dict")
-    lines = []
-    for block in payload.get("blocks", []):
-        if block.get("type") != 0:
+    normalized_rows = []
+    for row in rows:
+        normalized = [clean_line(str(cell or "").replace("\n", " ")) for cell in row]
+        while len(normalized) < col_count:
+            normalized.append("")
+        normalized = normalized[:col_count]
+        if any(normalized):
+            normalized_rows.append(normalized)
+
+    if len(normalized_rows) < 2:
+        return ""
+
+    def esc(cell: str) -> str:
+        return cell.replace("|", "\\|")
+
+    def is_achievement_header_row(row: list[str]) -> bool:
+        if len(row) < 5:
+            return False
+        first = row[0].lower()
+        rest = " ".join(row[1:5]).lower()
+        return "categories" in first and "level 1" in rest and "level 4" in rest
+
+    def is_separator_like_row(row: list[str]) -> bool:
+        return all(re.fullmatch(r"-{2,}", cell.strip()) for cell in row if cell.strip()) and any(cell.strip() for cell in row)
+
+    if is_achievement_header_row(normalized_rows[0]):
+        header = normalized_rows[0]
+        body = normalized_rows[1:]
+    elif col_count == 5:
+        header = ["Categories", "Level 1", "Level 2", "Level 3", "Level 4"]
+        body = normalized_rows
+    else:
+        header = normalized_rows[0]
+        body = normalized_rows[1:]
+
+    body = [row for row in body if not is_achievement_header_row(row) and not is_separator_like_row(row)]
+    if not body:
+        return ""
+    lines = [
+        f"| {' | '.join(esc(cell) for cell in header)} |",
+        f"|{'|'.join(['---'] * col_count)}|",
+    ]
+    for row in body:
+        lines.append(f"| {' | '.join(esc(cell) for cell in row)} |")
+    return "\n".join(lines)
+
+
+def extract_page_tables(page, top: float, bottom: float) -> list[dict]:
+    found = []
+    try:
+        table_objs = page.find_tables().tables
+    except Exception:
+        table_objs = []
+
+    seen = set()
+    for table in table_objs:
+        bbox = getattr(table, "bbox", None)
+        if not bbox or len(bbox) < 4:
             continue
-        for line in block.get("lines", []):
-            bbox = line.get("bbox", [0, 0, 0, 0])
-            x0, y0, y1 = float(bbox[0]), float(bbox[1]), float(bbox[3])
-            if y1 <= top or y0 >= bottom:
-                continue
-            parts = []
-            for span in line.get("spans", []):
-                text = clean_line(span.get("text", ""))
-                if text:
-                    parts.append(text)
-            text = clean_line(" ".join(parts))
-            if text:
-                lines.append({"x0": x0, "y0": y0, "y1": y1, "text": text})
+        x0, y0, x1, y1 = [float(v) for v in bbox[:4]]
+        if y1 <= top or y0 >= bottom:
+            continue
+        md = markdown_table_from_rows(table.extract() or [])
+        if not md:
+            continue
+        key = (round(y0, 1), round(y1, 1), md)
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append(
+            {
+                "x0": x0,
+                "x1": x1,
+                "y0": max(y0, top),
+                "y1": min(y1, bottom),
+                "md": md,
+            }
+        )
 
+    found.sort(key=lambda item: (item["y0"], item["x0"]))
+    return found
+
+
+def lines_to_paragraphs(lines: list[dict]) -> list[str]:
     if not lines:
         return []
 
-    lines.sort(key=lambda item: (item["y0"], item["x0"]))
+    lines = sorted(lines, key=lambda item: (item["y0"], item["x0"]))
     baseline_x = min(line["x0"] for line in lines)
-
     bullet_pattern = re.compile(r"^([•\-*]|\d+\.)\s+")
     paragraphs = []
     current = []
@@ -556,8 +653,6 @@ def page_blocks(page, y_min=None, y_max=None):
         gap = line["y0"] - prev["y1"]
         indent_delta = line["x0"] - baseline_x
         prev_indent_delta = prev["x0"] - baseline_x
-
-        # Keep wrapped lines attached to the current bullet item.
         continuation_of_bullet = (
             current_is_bullet
             and not bullet
@@ -578,6 +673,77 @@ def page_blocks(page, y_min=None, y_max=None):
 
     flush()
     return paragraphs
+
+
+def page_blocks(page, y_min=None, y_max=None):
+    top = 0.0 if y_min is None else max(0.0, float(y_min) + 0.5)
+    bottom = float(page.rect.height) if y_max is None else float(y_max)
+    if bottom <= top:
+        return []
+
+    tables = extract_page_tables(page, top, bottom)
+    payload = page.get_text("dict")
+    lines = []
+    for block in payload.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            bbox = line.get("bbox", [0, 0, 0, 0])
+            x0, x1, y0, y1 = float(bbox[0]), float(bbox[2]), float(bbox[1]), float(bbox[3])
+            if y1 <= top or y0 >= bottom:
+                continue
+            if any(
+                not (x1 <= tb["x0"] or x0 >= tb["x1"] or y1 <= tb["y0"] or y0 >= tb["y1"])
+                for tb in tables
+            ):
+                continue
+            parts = []
+            for span in line.get("spans", []):
+                text = clean_line(span.get("text", ""))
+                if text:
+                    parts.append(text)
+            text = clean_line(" ".join(parts))
+            if text:
+                lines.append({"x0": x0, "y0": y0, "y1": y1, "text": text})
+
+    if not lines and not tables:
+        return []
+
+    lines = sorted(lines, key=lambda item: (item["y0"], item["x0"]))
+    output_blocks = []
+    li = 0
+    for table in tables:
+        pre_lines = []
+        while li < len(lines) and lines[li]["y0"] < table["y0"]:
+            pre_lines.append(lines[li])
+            li += 1
+        output_blocks.extend(lines_to_paragraphs(pre_lines))
+        output_blocks.append(table["md"])
+        while li < len(lines) and lines[li]["y0"] < table["y1"]:
+            li += 1
+
+    if li < len(lines):
+        output_blocks.extend(lines_to_paragraphs(lines[li:]))
+
+    return [block for block in output_blocks if clean_line(block)]
+
+def prepare_output_dirs(out_dir: Path) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sections_dir = out_dir / "sections"
+    sections_dir.mkdir(parents=True, exist_ok=True)
+
+    # Avoid removing the whole output tree on Windows: open handles (editors/previewers)
+    # can lock files and make shutil.rmtree fail with WinError 32.
+    for existing in sections_dir.glob("*.md"):
+        try:
+            existing.unlink()
+        except PermissionError as err:
+            raise RuntimeError(
+                f"Output file is locked by another process: {existing}. "
+                "Close any open section files or preview windows and retry."
+            ) from err
+
+    return sections_dir
 
 
 def cleanup_section_body(body: str, title: str, next_title: str | None = None) -> str:
@@ -618,12 +784,8 @@ def cleanup_section_body(body: str, title: str, next_title: str | None = None) -
     return out
 
 
-def write_outputs(doc, outline, out_dir: Path, max_section_chars: int):
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    sections_dir = out_dir / "sections"
-    sections_dir.mkdir(parents=True, exist_ok=True)
+def write_outputs(doc, outline, out_dir: Path, max_section_chars: int, include_section_metadata: bool):
+    sections_dir = prepare_output_dirs(out_dir)
 
     normalized = []
     for idx, item in enumerate(outline, start=1):
@@ -686,6 +848,8 @@ def write_outputs(doc, outline, out_dir: Path, max_section_chars: int):
         body = stitch_orphan_continuations(body)
         body = format_dot_leader_blocks(body)
         body = format_course_table_blocks(body)
+        body = remove_redundant_table_header_lines(body)
+        body = remove_duplicate_markdown_table_headers(body)
         section_rows.append(
             {
                 "index": i,
@@ -724,35 +888,36 @@ def write_outputs(doc, outline, out_dir: Path, max_section_chars: int):
 
         current["line_count"] = len([line for line in body.splitlines() if line.strip()])
         current["char_count"] = len(body)
-        chunks = chunk_text(body, max(1000, max_section_chars))
-
-        for cidx, chunk in enumerate(chunks, start=1):
-            suffix = f"-part-{cidx}" if len(chunks) > 1 else ""
-            file_name = f"{section_code}-{slugify(current['title'])}{suffix}.md"
-            section_path = f"sections/{file_name}"
-            if current.get("section_file") is None:
-                current["section_file"] = section_path
-            md_level = max(1, min(6, int(current["level"])))
-            heading_prefix = "#" * md_level
-            markdown = (
-                f"{heading_prefix} {current['title']}\n\n"
+        file_name = f"{section_code}-{slugify(current['title'])}.md"
+        section_path = f"sections/{file_name}"
+        current["section_file"] = section_path
+        md_level = max(1, min(6, int(current["level"])))
+        heading_prefix = "#" * md_level
+        if include_section_metadata:
+            metadata_block = (
                 f"- Level: {current['level']}\n"
                 f"- Pages: {start}-{end}\n"
                 f"- Source: {current['source']}\n\n"
-                f"{chunk}\n"
             )
-            (sections_dir / file_name).write_text(markdown, encoding="utf-8")
-            segments.append(
-                {
-                    "id": f"s{len(segments)+1}",
-                    "title": f"{current['title']} (Part {cidx})" if len(chunks) > 1 else current["title"],
-                    "level": current["level"],
-                    "page_start": start,
-                    "page_end": end,
-                    "file": section_path,
-                    "char_count": len(chunk),
-                }
-            )
+        else:
+            metadata_block = ""
+        markdown = (
+            f"{heading_prefix} {current['title']}\n\n"
+            f"{metadata_block}"
+            f"{body}\n"
+        )
+        (sections_dir / file_name).write_text(markdown, encoding="utf-8")
+        segments.append(
+            {
+                "id": f"s{len(segments)+1}",
+                "title": current["title"],
+                "level": current["level"],
+                "page_start": start,
+                "page_end": end,
+                "file": section_path,
+                "char_count": len(body),
+            }
+        )
 
     (out_dir / "outline.json").write_text(json.dumps(normalized, indent=2), encoding="utf-8")
     (out_dir / "segments.json").write_text(json.dumps(segments, indent=2), encoding="utf-8")
@@ -778,6 +943,13 @@ def main():
     parser.add_argument("--input", "-i", required=True, help="Input PDF path")
     parser.add_argument("--out-dir", "-o", default="output", help="Output directory root")
     parser.add_argument("--max-section-chars", type=int, default=8000, help="Max chars per section chunk")
+    parser.add_argument(
+        "--include-section-metadata",
+        type=int,
+        choices=[0, 1],
+        default=1,
+        help="Include section metadata header lines (Level/Pages/Source) in output markdown files",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input).expanduser().resolve()
@@ -798,7 +970,13 @@ def main():
     base = input_path.stem
     out_dir = Path(args.out_dir).expanduser().resolve() / base
     print("PROGRESS: Writing outline and section markdown files", flush=True)
-    normalized, segments = write_outputs(doc, outline, out_dir, args.max_section_chars)
+    normalized, segments = write_outputs(
+        doc,
+        outline,
+        out_dir,
+        args.max_section_chars,
+        bool(args.include_section_metadata),
+    )
     print("PROGRESS: Finalizing output indexes", flush=True)
 
     print("Phase 1 extraction complete")
@@ -810,3 +988,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

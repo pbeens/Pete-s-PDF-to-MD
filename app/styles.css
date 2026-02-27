@@ -48,6 +48,38 @@ body {
   align-items: center;
 }
 
+.menu-wrap {
+  position: relative;
+}
+
+.menu-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 190px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+  padding: 0.25rem 0;
+  z-index: 1000;
+}
+
+.menu-dropdown button {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.menu-dropdown button:hover {
+  background: #edf4ea;
+}
+
 button {
   border: 1px solid var(--line);
   background: #fff;
@@ -72,10 +104,10 @@ button:disabled {
 .status-row {
   padding: 0.55rem 1.25rem;
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr);
+  grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr) auto;
   grid-template-areas:
-    "input output"
-    "status status";
+    "input output conversion"
+    "status status status";
   align-items: center;
   row-gap: 0.3rem;
   column-gap: 1rem;
@@ -83,6 +115,14 @@ button:disabled {
   font-size: 0.88rem;
   background: #f6f9f3;
   min-height: 4rem;
+}
+
+.accuracy-note {
+  padding: 0.45rem 1.25rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+  background: #fff7e8;
+  color: #6f4c12;
+  font-size: 0.82rem;
 }
 
 .status-row > div {
@@ -118,6 +158,11 @@ button:disabled {
   grid-area: output;
 }
 
+.status-conversion {
+  grid-area: conversion;
+  justify-self: end;
+}
+
 .status-status {
   grid-area: status;
   white-space: normal;
@@ -133,6 +178,14 @@ button:disabled {
 .label {
   color: var(--muted);
   margin-right: 0.35rem;
+}
+
+#pickPdfBtn.drag-active {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: #e9f5e4;
+  color: var(--accent-2);
+  box-shadow: 0 0 0 3px rgba(20, 83, 45, 0.16);
 }
 
 .layout {
@@ -199,6 +252,13 @@ button:disabled {
   font-size: 1rem;
 }
 
+.hint-note {
+  margin-left: auto;
+  font-size: 0.74rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .path {
   font-size: 0.8rem;
   color: var(--muted);
@@ -215,11 +275,56 @@ button:disabled {
   gap: 0.4rem;
   font-size: 0.82rem;
   color: var(--muted);
-  margin-left: auto;
 }
 
 .checkbox-label input {
   margin: 0;
+}
+
+.panel-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+button.primary.up-to-date {
+  background: #ffffff;
+  color: var(--muted);
+  border-color: var(--line);
+}
+
+.about-dialog {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0;
+  width: min(520px, 92vw);
+  max-width: 92vw;
+}
+
+.about-dialog::backdrop {
+  background: rgba(20, 28, 22, 0.35);
+}
+
+.about-dialog-body {
+  margin: 0;
+  padding: 1rem 1.1rem;
+}
+
+.about-dialog-body h3 {
+  margin: 0 0 0.6rem;
+}
+
+.about-dialog-body p {
+  margin: 0.35rem 0;
+}
+
+.about-actions {
+  margin-top: 0.9rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 #sectionContent,
@@ -320,6 +425,32 @@ button:disabled {
   color: var(--accent-2);
 }
 
+.section-context-menu {
+  position: fixed;
+  z-index: 9999;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+  min-width: 220px;
+  padding: 0.25rem 0;
+}
+
+.section-context-menu button {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.section-context-menu button:hover {
+  background: #edf4ea;
+}
+
 .section-title {
   line-height: 1.3;
 }
@@ -358,6 +489,7 @@ button:disabled {
     grid-template-areas:
       "input"
       "output"
+      "conversion"
       "status";
     min-height: 0;
   }

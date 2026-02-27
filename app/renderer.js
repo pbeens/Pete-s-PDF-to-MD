@@ -1,10 +1,14 @@
 const state = {
   inputPdfPath: '',
   outputRootPath: '',
+  currentSectionPath: '',
   outlineItems: [],
   selectedSection: '',
   currentSectionRaw: '',
   renderMarkdown: false,
+  hideSectionMetaInPreview: false,
+  includeSectionMetaInFiles: true,
+  conversionDirty: false,
   activeConversionRunId: null,
   conversionStatusBase: '',
   conversionStatusTicker: null,
@@ -12,11 +16,21 @@ const state = {
 };
 const RUN_CONVERSION_TIMEOUT_MS = 90 * 1000;
 const UI_UNLOCK_WATCHDOG_MS = 45 * 1000;
+const SECTION_METADATA_BLOCK_REGEX = /\r?\n\r?\n- Level:[^\r\n]*\r?\n- Pages:[^\r\n]*\r?\n- Source:[^\r\n]*\r?\n\r?\n/;
 
 const pickPdfBtn = document.getElementById('pickPdfBtn');
 const runBtn = document.getElementById('runBtn');
 const openOutputBtn = document.getElementById('openOutputBtn');
 const pickOutputBtn = document.getElementById('pickOutputBtn');
+const supportMenuWrapEl = document.getElementById('supportMenuWrap');
+const supportMenuBtn = document.getElementById('supportMenuBtn');
+const supportMenuEl = document.getElementById('supportMenu');
+const aboutBtn = document.getElementById('aboutBtn');
+const aboutDialog = document.getElementById('aboutDialog');
+const openRepoBtn = document.getElementById('openRepoBtn');
+const aboutBuyCoffeeBtn = document.getElementById('aboutBuyCoffeeBtn');
+const reportBugBtn = document.getElementById('reportBugBtn');
+const buyCoffeeBtn = document.getElementById('buyCoffeeBtn');
 const inputPathEl = document.getElementById('inputPath');
 const outputRootPathEl = document.getElementById('outputRootPath');
 const statusTextEl = document.getElementById('statusText');
@@ -26,38 +40,93 @@ const sectionPathEl = document.getElementById('sectionPath');
 const sectionContentEl = document.getElementById('sectionContent');
 const sectionContentRenderedEl = document.getElementById('sectionContentRendered');
 const renderMarkdownChk = document.getElementById('renderMarkdownChk');
+const hideSectionMetaChk = document.getElementById('hideSectionMetaChk');
+const includeSectionMetaChk = document.getElementById('includeSectionMetaChk');
 const buildStampEl = document.getElementById('buildStamp');
 const mainLayoutEl = document.getElementById('mainLayout');
 const outlinePanelEl = document.getElementById('outlinePanel');
 const toggleOutlineBtn = document.getElementById('toggleOutlineBtn');
+const inputDropZoneEl = pickPdfBtn;
 let unsubscribeConversionProgress = null;
+let sectionContextMenuEl = null;
+let sectionContextTarget = '';
 const OUTLINE_COLLAPSE_KEY = 'pdf_to_md_outline_collapsed';
 const RENDER_MARKDOWN_KEY = 'pdf_to_md_render_markdown';
+const HIDE_SECTION_META_PREVIEW_KEY = 'pdf_to_md_hide_section_meta_preview';
+const INCLUDE_SECTION_META_FILES_KEY = 'pdf_to_md_include_section_meta_files';
+const ISSUES_URL = 'https://github.com/pbeens/Pete-s-PDF-to-MD/issues';
+const BUY_COFFEE_URL = 'https://buymeacoffee.com/pbeens';
+const REPO_URL = 'https://github.com/pbeens/Pete-s-PDF-to-MD';
 
 function setStatus(text) {
   statusTextEl.textContent = text;
 }
 
-function compactPath(fullPath, maxChars = 56) {
+function closeSupportMenu() {
+  if (!supportMenuEl || !supportMenuBtn) return;
+  supportMenuEl.hidden = true;
+  supportMenuBtn.setAttribute('aria-expanded', 'false');
+}
+
+function toggleSupportMenu() {
+  if (!supportMenuEl || !supportMenuBtn) return;
+  const opening = Boolean(supportMenuEl.hidden);
+  supportMenuEl.hidden = !opening;
+  supportMenuBtn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+}
+
+let pathMeasureCanvas = null;
+
+function measureTextWidth(text, element) {
+  if (!pathMeasureCanvas) {
+    pathMeasureCanvas = document.createElement('canvas');
+  }
+  const ctx = pathMeasureCanvas.getContext('2d');
+  const style = window.getComputedStyle(element);
+  ctx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  return ctx.measureText(String(text || '')).width;
+}
+
+function splitPathParts(pathValue) {
+  const value = String(pathValue || '');
+  const sep = value.includes('\\') ? '\\' : '/';
+  const parts = value.split(/[\\/]+/).filter(Boolean);
+  return { value, sep, parts };
+}
+
+function middleEllipsizePath(fullPath, element) {
   const value = String(fullPath || '');
-  if (!value) return '(none)';
-  if (value.length <= maxChars) return value;
-  const side = Math.max(10, Math.floor((maxChars - 3) / 2));
-  return `${value.slice(0, side)}...${value.slice(-side)}`;
+  if (!value) return '';
+  const availableWidth = Math.max(0, Math.floor(element.clientWidth || element.offsetWidth || 0));
+  if (!availableWidth || measureTextWidth(value, element) <= availableWidth) {
+    return value;
+  }
+
+  const { sep, parts } = splitPathParts(value);
+  if (parts.length <= 1) return value;
+
+  const endSegment = parts[parts.length - 1];
+  const startParts = parts.length >= 2 ? parts.slice(0, 2) : parts.slice(0, 1);
+  const startSegment = startParts.join(sep);
+  const minimal = `${startSegment}${sep}...${sep}${endSegment}`;
+
+  // Preserve file/folder name in full; if width is still too small, allow CSS clipping.
+  return minimal;
 }
 
 function renderPathDisplays() {
   const inputFull = state.inputPdfPath || '(none)';
   const outputFull = state.outputRootPath || '(default)';
-  inputPathEl.textContent = compactPath(inputFull, 54);
-  outputRootPathEl.textContent = compactPath(outputFull, 50);
+  inputPathEl.textContent = middleEllipsizePath(inputFull, inputPathEl);
+  outputRootPathEl.textContent = middleEllipsizePath(outputFull, outputRootPathEl);
   inputPathEl.title = inputFull;
   outputRootPathEl.title = outputFull;
 }
 
 function renderSectionPathDisplay(fullPath) {
   const text = String(fullPath || '');
-  sectionPathEl.textContent = text ? compactPath(text, 68) : '';
+  state.currentSectionPath = text;
+  sectionPathEl.textContent = text ? middleEllipsizePath(text, sectionPathEl) : '';
   sectionPathEl.title = text;
 }
 
@@ -100,11 +169,32 @@ function stopConversionStatus() {
   state.conversionStartedAt = 0;
 }
 
+function updateRunButtonState() {
+  const busy = Boolean(state.activeConversionRunId);
+  const canRun = !busy && Boolean(state.inputPdfPath) && Boolean(state.conversionDirty);
+  runBtn.disabled = !canRun;
+  runBtn.classList.toggle('up-to-date', !busy && Boolean(state.inputPdfPath) && !state.conversionDirty);
+  runBtn.textContent = state.conversionDirty ? 'Run Conversion' : 'Up to Date';
+}
+
+function markConversionDirty(reasonStatus) {
+  state.conversionDirty = true;
+  updateRunButtonState();
+  if (reasonStatus) {
+    setStatus(reasonStatus);
+  }
+}
+
+function markConversionClean() {
+  state.conversionDirty = false;
+  updateRunButtonState();
+}
+
 function setBusy(busy) {
-  runBtn.disabled = busy || !state.inputPdfPath;
   pickPdfBtn.disabled = busy;
   pickOutputBtn.disabled = busy;
   openOutputBtn.disabled = busy || !state.inputPdfPath;
+  updateRunButtonState();
 }
 
 function withTimeout(promise, timeoutMs, label) {
@@ -115,6 +205,76 @@ function withTimeout(promise, timeoutMs, label) {
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
 }
 
+function toUserErrorMessage(err, fallback = 'An unexpected error occurred.') {
+  let message = String(err?.message || err || '').trim();
+  if (!message) return fallback;
+
+  message = message
+    .replace(/^Error invoking remote method '[^']+':\s*/i, '')
+    .replace(/^Error:\s*/i, '');
+
+  const technicalBlock = message.match(/\n\s*(Technical details:|Traceback \(most recent call last\):|PROGRESS:)/i);
+  if (technicalBlock && Number.isInteger(technicalBlock.index) && technicalBlock.index > 0) {
+    message = message.slice(0, technicalBlock.index).trim();
+  }
+
+  if (message.length > 420) {
+    message = `${message.slice(0, 417).trimEnd()}...`;
+  }
+
+  return message || fallback;
+}
+
+function formatLocalDateTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return 'unknown';
+  const yyyy = String(date.getFullYear());
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const min = String(date.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
+function setInputPdfPath(filePath, options = {}) {
+  const forceDirty = Boolean(options.forceDirty);
+  const nextPath = String(filePath || '');
+  const changed = nextPath !== state.inputPdfPath;
+  state.inputPdfPath = nextPath;
+  renderPathDisplays();
+  openOutputBtn.disabled = !state.inputPdfPath;
+  if (!state.inputPdfPath) {
+    markConversionClean();
+  } else if (changed || forceDirty) {
+    markConversionDirty('PDF selected');
+  } else {
+    updateRunButtonState();
+  }
+}
+
+function getDropPayload(event) {
+  const files = Array.from(event?.dataTransfer?.files || []).map((file) => {
+    const nativePath = typeof window.pdfToMdApi?.getPathForFile === 'function'
+      ? window.pdfToMdApi.getPathForFile(file)
+      : '';
+    return {
+      name: String(file?.name || ''),
+      path: String(file?.path || nativePath || ''),
+    };
+  });
+  const dataTransfer = event?.dataTransfer;
+  const types = Array.from(dataTransfer?.types || []).map((t) => String(t || ''));
+  const textByType = {};
+  for (const type of types) {
+    try {
+      textByType[type] = String(dataTransfer?.getData(type) || '');
+    } catch (_err) {
+      // no-op
+    }
+  }
+  return { files, types, textByType };
+}
+
 function escapeHtml(text) {
   return String(text || '')
     .replaceAll('&', '&amp;')
@@ -122,6 +282,22 @@ function escapeHtml(text) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function escapeHtmlAllowSup(text) {
+  const source = String(text || '');
+  const superscripts = [];
+  const tokenized = source.replace(/<sup>\s*(\d{1,3})\s*<\/sup>/gi, (_m, num) => {
+    const idx = superscripts.length;
+    superscripts.push(String(num));
+    return `@@SUP_TOKEN_${idx}@@`;
+  });
+
+  let escaped = escapeHtml(tokenized);
+  for (let i = 0; i < superscripts.length; i += 1) {
+    escaped = escaped.replace(`@@SUP_TOKEN_${i}@@`, `<sup>${superscripts[i]}</sup>`);
+  }
+  return escaped;
 }
 
 function markdownToBasicHtml(markdownText) {
@@ -138,7 +314,7 @@ function markdownToBasicHtml(markdownText) {
 
   const splitTableCells = (line) => {
     const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
-    return trimmed.split('|').map((cell) => escapeHtml(cell.trim()));
+    return trimmed.split('|').map((cell) => escapeHtmlAllowSup(cell.trim()));
   };
 
   const isTableSeparator = (line) => {
@@ -167,7 +343,7 @@ function markdownToBasicHtml(markdownText) {
     if (headingMatch) {
       closeList();
       const level = Math.min(6, headingMatch[1].length);
-      out.push(`<h${level}>${escapeHtml(headingMatch[2])}</h${level}>`);
+      out.push(`<h${level}>${escapeHtmlAllowSup(headingMatch[2])}</h${level}>`);
       continue;
     }
 
@@ -223,19 +399,20 @@ function markdownToBasicHtml(markdownText) {
         itemParts.push(probeTrimmed);
         idx += 1;
       }
-      out.push(`<li>${escapeHtml(itemParts.join(' '))}</li>`);
+      out.push(`<li>${escapeHtmlAllowSup(itemParts.join(' '))}</li>`);
       continue;
     }
 
     closeList();
-    out.push(`<p>${escapeHtml(line.trim())}</p>`);
+    out.push(`<p>${escapeHtmlAllowSup(line.trim())}</p>`);
   }
   closeList();
   return out.join('\n');
 }
 
 function renderSectionContentView() {
-  const text = state.currentSectionRaw || '';
+  const raw = state.currentSectionRaw || '';
+  const text = state.hideSectionMetaInPreview ? stripSectionMetadataHeader(raw) : raw;
   sectionContentEl.textContent = text;
 
   if (state.renderMarkdown) {
@@ -279,7 +456,13 @@ function renderSectionsList() {
     btn.addEventListener('click', () => {
       state.selectedSection = item.section_file;
       updateSectionSelectionUI();
+      closeSectionContextMenu();
       void loadSection(item.section_file);
+    });
+    btn.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showSectionContextMenu(event.clientX, event.clientY, item.section_file);
     });
 
     const title = document.createElement('span');
@@ -294,6 +477,107 @@ function renderSectionsList() {
   updateSectionSelectionUI();
 }
 
+function stripSectionMetadataHeader(markdownText) {
+  const text = String(markdownText || '');
+  return text.replace(SECTION_METADATA_BLOCK_REGEX, '\n\n');
+}
+
+function sectionHasMetadataHeader(markdownText) {
+  return SECTION_METADATA_BLOCK_REGEX.test(String(markdownText || ''));
+}
+
+function updateHideMetaControlState() {
+  if (!hideSectionMetaChk) return;
+  const available = sectionHasMetadataHeader(state.currentSectionRaw || '');
+  hideSectionMetaChk.disabled = !available;
+  if (!available && state.hideSectionMetaInPreview) {
+    state.hideSectionMetaInPreview = false;
+    hideSectionMetaChk.checked = false;
+  }
+}
+
+function ensureSectionContextMenu() {
+  if (sectionContextMenuEl) return sectionContextMenuEl;
+  const menu = document.createElement('div');
+  menu.id = 'sectionContextMenu';
+  menu.className = 'section-context-menu';
+  menu.hidden = true;
+
+  const openFolderBtn = document.createElement('button');
+  openFolderBtn.type = 'button';
+  openFolderBtn.textContent = 'Open in folder';
+  openFolderBtn.addEventListener('click', async () => {
+    const target = sectionContextTarget;
+    closeSectionContextMenu();
+    if (!target || !state.inputPdfPath) return;
+    try {
+      await window.pdfToMdApi.openSectionInFolder(state.inputPdfPath, state.outputRootPath, target);
+    } catch (err) {
+      alert(`Could not open folder: ${toUserErrorMessage(err, 'Could not open folder.')}`);
+    }
+  });
+
+  const openDefaultBtn = document.createElement('button');
+  openDefaultBtn.type = 'button';
+  openDefaultBtn.textContent = 'Open in default program';
+  openDefaultBtn.addEventListener('click', async () => {
+    const target = sectionContextTarget;
+    closeSectionContextMenu();
+    if (!target || !state.inputPdfPath) return;
+    try {
+      await window.pdfToMdApi.openSectionDefault(state.inputPdfPath, state.outputRootPath, target);
+    } catch (err) {
+      alert(`Could not open file: ${toUserErrorMessage(err, 'Could not open file.')}`);
+    }
+  });
+
+  const copyPathBtn = document.createElement('button');
+  copyPathBtn.type = 'button';
+  copyPathBtn.textContent = 'Copy path';
+  copyPathBtn.addEventListener('click', async () => {
+    const target = sectionContextTarget;
+    closeSectionContextMenu();
+    if (!target || !state.inputPdfPath) return;
+    try {
+      const result = await window.pdfToMdApi.copySectionPath(state.inputPdfPath, state.outputRootPath, target);
+      if (result?.ok) {
+        setStatus('Section path copied');
+      }
+    } catch (err) {
+      alert(`Could not copy path: ${toUserErrorMessage(err, 'Could not copy path.')}`);
+    }
+  });
+
+  menu.appendChild(openFolderBtn);
+  menu.appendChild(openDefaultBtn);
+  menu.appendChild(copyPathBtn);
+  document.body.appendChild(menu);
+  sectionContextMenuEl = menu;
+  return menu;
+}
+
+function closeSectionContextMenu() {
+  if (!sectionContextMenuEl) return;
+  sectionContextMenuEl.hidden = true;
+  sectionContextTarget = '';
+}
+
+function showSectionContextMenu(clientX, clientY, sectionFile) {
+  const menu = ensureSectionContextMenu();
+  sectionContextTarget = sectionFile;
+  menu.hidden = false;
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+
+  const rect = menu.getBoundingClientRect();
+  const maxX = Math.max(8, window.innerWidth - rect.width - 8);
+  const maxY = Math.max(8, window.innerHeight - rect.height - 8);
+  const left = Math.min(Math.max(8, clientX), maxX);
+  const top = Math.min(Math.max(8, clientY), maxY);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+
 async function loadSection(sectionRelativePath) {
   if (!state.inputPdfPath || !sectionRelativePath) return;
   try {
@@ -306,12 +590,16 @@ async function loadSection(sectionRelativePath) {
     state.selectedSection = sectionRelativePath;
     state.currentSectionRaw = payload.content || '';
     renderSectionPathDisplay(payload.path);
+    updateHideMetaControlState();
     renderSectionContentView();
+    sectionContentEl.scrollTop = 0;
+    sectionContentRenderedEl.scrollTop = 0;
     updateSectionSelectionUI();
     setStatus('Ready');
   } catch (err) {
     setStatus('Error');
     state.currentSectionRaw = String(err.message || err);
+    updateHideMetaControlState();
     renderSectionContentView();
   }
 }
@@ -339,6 +627,7 @@ async function refreshOutline() {
     renderSectionPathDisplay('');
     state.currentSectionRaw = 'Select a section to preview content.';
   }
+  updateHideMetaControlState();
   renderSectionContentView();
   setStatus('Ready');
 }
@@ -352,17 +641,65 @@ pickPdfBtn.addEventListener('click', async () => {
       setStatus('Idle');
       return;
     }
-    state.inputPdfPath = result.filePath;
-    renderPathDisplays();
+    setInputPdfPath(result.filePath, { forceDirty: true });
     setStatus('PDF selected');
-    runBtn.disabled = false;
-    openOutputBtn.disabled = false;
   } catch (err) {
     setStatus('Error');
-    alert(`Failed to select PDF: ${err.message || err}`);
+    alert(`Failed to select PDF: ${toUserErrorMessage(err, 'Could not select a PDF file.')}`);
   } finally {
     setBusy(false);
   }
+});
+
+if (inputDropZoneEl) {
+  inputDropZoneEl.addEventListener('dragenter', (event) => {
+    event.preventDefault();
+    if (!state.activeConversionRunId) {
+      inputDropZoneEl.classList.add('drag-active');
+      setStatus('Drop PDF on Select PDF button');
+    }
+  });
+
+  inputDropZoneEl.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = state.activeConversionRunId ? 'none' : 'copy';
+  });
+
+  inputDropZoneEl.addEventListener('dragleave', () => {
+    inputDropZoneEl.classList.remove('drag-active');
+    if (!state.activeConversionRunId) {
+      setStatus(state.inputPdfPath ? 'PDF selected' : 'Idle');
+    }
+  });
+
+  inputDropZoneEl.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    inputDropZoneEl.classList.remove('drag-active');
+
+    if (state.activeConversionRunId) {
+      setStatus('Conversion in progress. Wait for completion before changing input.');
+      return;
+    }
+
+    const dropPayload = getDropPayload(event);
+    const validation = await window.pdfToMdApi.resolveDroppedInputPdf(dropPayload);
+    if (!validation?.ok || !validation?.filePath) {
+      setStatus('Error');
+      alert(toUserErrorMessage(validation?.message || 'Dropped file path is invalid.'));
+      return;
+    }
+
+    setInputPdfPath(validation.filePath, { forceDirty: true });
+    setStatus('PDF selected');
+  });
+}
+
+window.addEventListener('dragover', (event) => {
+  event.preventDefault();
+});
+
+window.addEventListener('drop', (event) => {
+  event.preventDefault();
 });
 
 runBtn.addEventListener('click', async () => {
@@ -379,7 +716,9 @@ runBtn.addEventListener('click', async () => {
   }, UI_UNLOCK_WATCHDOG_MS);
 
   void withTimeout(
-    window.pdfToMdApi.runConversion(state.inputPdfPath, state.outputRootPath),
+    window.pdfToMdApi.runConversion(state.inputPdfPath, state.outputRootPath, {
+      includeSectionMetadata: state.includeSectionMetaInFiles,
+    }),
     RUN_CONVERSION_TIMEOUT_MS,
     'Running conversion'
   ).then((payload) => {
@@ -403,6 +742,7 @@ runBtn.addEventListener('click', async () => {
       state.currentSectionRaw = 'Conversion complete. Select a section to preview content.';
     }
     renderSectionContentView();
+    markConversionClean();
     setStatus('Conversion complete');
   }).catch((err) => {
     if (state.activeConversionRunId !== runId) return;
@@ -417,7 +757,8 @@ runBtn.addEventListener('click', async () => {
       });
     } else {
       setStatus('Error');
-      alert(`Conversion failed: ${message}`);
+      console.error('Conversion failed (full details):', err);
+      alert(`Conversion failed: ${toUserErrorMessage(err, 'Conversion failed.')}`);
     }
   }).finally(() => {
     if (watchdog) {
@@ -436,7 +777,7 @@ openOutputBtn.addEventListener('click', async () => {
   try {
     await window.pdfToMdApi.openOutputDir(state.inputPdfPath, state.outputRootPath);
   } catch (err) {
-    alert(`Could not open output folder: ${err.message || err}`);
+    alert(`Could not open output folder: ${toUserErrorMessage(err, 'Could not open output folder.')}`);
   }
 });
 
@@ -446,15 +787,20 @@ pickOutputBtn.addEventListener('click', async () => {
     setStatus('Selecting output folder...');
     const result = await window.pdfToMdApi.pickOutputDir(state.outputRootPath);
     if (!result?.canceled && result?.dirPath) {
+      const changed = String(result.dirPath) !== String(state.outputRootPath);
       state.outputRootPath = result.dirPath;
       renderPathDisplays();
-      setStatus('Output folder updated');
+      if (changed) {
+        markConversionDirty('Output folder updated');
+      } else {
+        setStatus('Ready');
+      }
     } else {
       setStatus('Ready');
     }
   } catch (err) {
     setStatus('Error');
-    alert(`Failed to pick output folder: ${err.message || err}`);
+    alert(`Failed to pick output folder: ${toUserErrorMessage(err, 'Could not select an output folder.')}`);
   } finally {
     setBusy(false);
   }
@@ -484,6 +830,47 @@ if (renderMarkdownChk) {
   });
 }
 
+if (hideSectionMetaChk) {
+  hideSectionMetaChk.addEventListener('change', () => {
+    state.hideSectionMetaInPreview = Boolean(hideSectionMetaChk.checked);
+    renderSectionContentView();
+    try {
+      localStorage.setItem(HIDE_SECTION_META_PREVIEW_KEY, state.hideSectionMetaInPreview ? '1' : '0');
+    } catch (_err) {
+      // no-op
+    }
+  });
+}
+
+if (includeSectionMetaChk) {
+  includeSectionMetaChk.addEventListener('change', () => {
+    const nextValue = Boolean(includeSectionMetaChk.checked);
+    const changed = nextValue !== state.includeSectionMetaInFiles;
+    state.includeSectionMetaInFiles = nextValue;
+    try {
+      localStorage.setItem(INCLUDE_SECTION_META_FILES_KEY, state.includeSectionMetaInFiles ? '1' : '0');
+    } catch (_err) {
+      // no-op
+    }
+    if (changed && state.inputPdfPath) {
+      markConversionDirty('Conversion options changed');
+    } else {
+      updateRunButtonState();
+    }
+  });
+}
+
+document.addEventListener('click', (event) => {
+  if (supportMenuWrapEl && supportMenuEl && !supportMenuEl.hidden) {
+    if (!supportMenuWrapEl.contains(event.target)) {
+      closeSupportMenu();
+    }
+  }
+  if (!sectionContextMenuEl || sectionContextMenuEl.hidden) return;
+  if (sectionContextMenuEl.contains(event.target)) return;
+  closeSectionContextMenu();
+});
+
 (async function boot() {
   try {
     try {
@@ -503,6 +890,26 @@ if (renderMarkdownChk) {
       renderMarkdownChk.checked = state.renderMarkdown;
     }
 
+    try {
+      const savedHideMeta = localStorage.getItem(HIDE_SECTION_META_PREVIEW_KEY);
+      state.hideSectionMetaInPreview = savedHideMeta === '1';
+    } catch (_err) {
+      state.hideSectionMetaInPreview = false;
+    }
+    if (hideSectionMetaChk) {
+      hideSectionMetaChk.checked = state.hideSectionMetaInPreview;
+    }
+
+    try {
+      const savedIncludeMeta = localStorage.getItem(INCLUDE_SECTION_META_FILES_KEY);
+      state.includeSectionMetaInFiles = savedIncludeMeta !== '0';
+    } catch (_err) {
+      state.includeSectionMetaInFiles = true;
+    }
+    if (includeSectionMetaChk) {
+      includeSectionMetaChk.checked = state.includeSectionMetaInFiles;
+    }
+
     if (typeof window.pdfToMdApi.onConversionProgress === 'function') {
       unsubscribeConversionProgress = window.pdfToMdApi.onConversionProgress((payload) => {
         if (!state.activeConversionRunId) return;
@@ -517,7 +924,12 @@ if (renderMarkdownChk) {
       document.title = appMeta.title;
     }
     if (buildStampEl) {
-      buildStampEl.textContent = `Build: v${appMeta?.version || '?'} | ${appMeta?.startedAt || 'unknown'}`;
+      if (appMeta?.isPackaged) {
+        buildStampEl.hidden = true;
+      } else {
+        buildStampEl.hidden = false;
+        buildStampEl.textContent = `Build: v${appMeta?.version || '?'} | ${formatLocalDateTime(appMeta?.startedAt)}`;
+      }
     }
 
     const defaults = await window.pdfToMdApi.getDefaultOutputRoot();
@@ -526,12 +938,15 @@ if (renderMarkdownChk) {
   } catch (_err) {
     if (buildStampEl) {
       buildStampEl.textContent = 'Build: unavailable';
+      buildStampEl.hidden = false;
     }
     renderPathDisplays();
   }
   setStatus('Idle');
+  updateRunButtonState();
   outlinePreviewEl.textContent = 'Select a PDF and click Run Conversion.';
   state.currentSectionRaw = 'Section content will appear here.';
+  updateHideMetaControlState();
   renderSectionContentView();
 })();
 
@@ -541,4 +956,66 @@ window.addEventListener('beforeunload', () => {
     unsubscribeConversionProgress();
     unsubscribeConversionProgress = null;
   }
+});
+
+if (supportMenuBtn && supportMenuEl) {
+  supportMenuBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleSupportMenu();
+  });
+}
+
+if (reportBugBtn) {
+  reportBugBtn.addEventListener('click', async () => {
+    closeSupportMenu();
+    try {
+      await window.pdfToMdApi.openExternalUrl(ISSUES_URL);
+    } catch (err) {
+      alert(`Could not open Issues page: ${toUserErrorMessage(err, 'Could not open Issues page.')}`);
+    }
+  });
+}
+
+if (buyCoffeeBtn) {
+  buyCoffeeBtn.addEventListener('click', async () => {
+    closeSupportMenu();
+    try {
+      await window.pdfToMdApi.openExternalUrl(BUY_COFFEE_URL);
+    } catch (err) {
+      alert(`Could not open Buy Me a Coffee page: ${toUserErrorMessage(err, 'Could not open Buy Me a Coffee page.')}`);
+    }
+  });
+}
+
+if (aboutBtn && aboutDialog) {
+  aboutBtn.addEventListener('click', () => {
+    closeSupportMenu();
+    aboutDialog.showModal();
+  });
+}
+
+if (openRepoBtn) {
+  openRepoBtn.addEventListener('click', async () => {
+    try {
+      await window.pdfToMdApi.openExternalUrl(REPO_URL);
+    } catch (err) {
+      alert(`Could not open repository URL: ${toUserErrorMessage(err, 'Could not open repository URL.')}`);
+    }
+  });
+}
+
+if (aboutBuyCoffeeBtn) {
+  aboutBuyCoffeeBtn.addEventListener('click', async () => {
+    try {
+      await window.pdfToMdApi.openExternalUrl(BUY_COFFEE_URL);
+    } catch (err) {
+      alert(`Could not open Buy Me a Coffee page: ${toUserErrorMessage(err, 'Could not open Buy Me a Coffee page.')}`);
+    }
+  });
+}
+
+window.addEventListener('resize', () => {
+  renderPathDisplays();
+  renderSectionPathDisplay(state.currentSectionPath || '');
 });

@@ -4,7 +4,7 @@ Open-source utility to convert PDF documents to high-quality Markdown for AI wor
 
 ## Current Version
 
-`v0.5.0`
+`v0.6.0`
 
 ## Releases
 
@@ -31,11 +31,11 @@ Install PyMuPDF:
 3. Run unpackaged app for development:
    `npm run gui`
 4. Build release artifact (DMG):
-   `npm run release:prep -- --version 0.5.0 --build`
+   `npm run release:prep -- --version 0.6.0 --build`
 
 Release artifact:
 
-- `dist/Pete-s-PDF-to-MD-v0.5.0-macOS.dmg`
+- `dist/Pete-s-PDF-to-MD-v0.6.0-macOS.dmg`
 
 ### Windows (PowerShell)
 
@@ -105,7 +105,13 @@ Outputs:
 - `output/<pdf-name>/outline.json`
 - `output/<pdf-name>/outline.md`
 - `output/<pdf-name>/segments.json`
-- `output/<pdf-name>/sections/*.md`
+- `output/<pdf-name>/sections/*.md` (one merged markdown file per heading)
+
+## Extraction Accuracy
+
+- PDF structure varies significantly across files; extracted headings, section boundaries, and text flow may not be 100% exact for every document.
+- Best results come from well-structured PDFs with a reliable embedded outline/table of contents.
+- Always review output before downstream publishing or automation.
 
 ## GUI (Electron)
 
@@ -139,16 +145,21 @@ Notes for Windows:
 Current GUI features:
 
 - select a PDF file
+- drag and drop a PDF onto the `Select PDF` button
 - select output root folder
 - run conversion (calls existing `scripts/phase1.js`)
 - preview `outline.md`
 - browse sections from `outline.json`
 - view section markdown content
+- right-click section action: `Open in folder`
+- right-click section action: `Open in default program`
 - open output folder
 
 Notes:
 
 - The app now quits when the last window is closed (so terminal returns immediately).
+- Build stamp uses local time format: `yyyy-mm-dd hh:mm`.
+- Section path display uses middle truncation to preserve start and filename.
 
 ## Troubleshooting
 
@@ -161,7 +172,17 @@ Notes:
 
 - This indicates an older packaged build.
 - Rebuild and reinstall using:
-  `npm run release:prep -- --version 0.5.0 --build`
+  `npm run release:prep -- --version 0.6.0 --build`
+
+### "Conversion failed ... Output files are locked by another program"
+
+- Close any open files, previews, or editors under the output `sections/` folder.
+- Retry conversion after releasing file locks.
+
+### "Conversion failed ... invalid/corrupt PDF"
+
+- The file may be incomplete/corrupt or not a valid PDF despite extension.
+- Open in a PDF viewer and re-export/save as a new PDF, then retry.
 
 ### "PyMuPDF is not installed"
 
@@ -173,8 +194,10 @@ Notes:
 ### "I only see a .app file after build"
 
 - `dist/mac-arm64/*.app` is an intermediate output.
-- Upload `dist/Pete-s-PDF-to-MD-v0.5.0-macOS.dmg` to GitHub Releases.
+- Upload `dist/Pete-s-PDF-to-MD-v0.6.0-macOS.dmg` to GitHub Releases.
 
 ## License
 
 This project is licensed under GPL-3.0. See `LICENSE`.
+
+

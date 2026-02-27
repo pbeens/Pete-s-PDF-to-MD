@@ -15,3 +15,7 @@ dist/
 node_modules/
 npm-debug.log*
 .npm/
+
+# Python cache / bytecode
+__pycache__/
+*.py[cod]

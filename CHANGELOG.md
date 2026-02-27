@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.0] - 2026-02-27
+
+### Added
+
+- Input PDF drag-and-drop support with validation for Windows drag payload variants.
+- Section context menu action: `Open in folder`.
+- Section context menu action: `Open in default program`.
+- Section context menu action: `Copy path`.
+
+### Fixed
+
+- Windows packaged app no longer opens a console window during conversion subprocess execution by setting `windowsHide: true` on Node/Python child process launches.
+- Conversion failures now show a clear invalid/corrupt PDF message when PyMuPDF reports format parsing errors (for example, "no objects found"), while still including technical details.
+- Section content pane now resets scroll position to top when loading a different section.
+- GUI error popups now suppress long traceback/progress blocks and display concise user-facing messages.
+- Rendered markdown now correctly displays inline superscript tags such as `<sup>51</sup>`.
+- Conversion reliability on Windows improved by avoiding full output tree deletion; locked file scenarios now return a clear "output files are locked" message.
+- Drag/drop path normalization improved for file URIs and Windows path formats.
+
+### Changed
+
+- Release version baseline set to `v0.6.0`.
+- Path display now uses rendered-width middle truncation that preserves the start of the path and full trailing filename.
+- Build stamp now displays local time in `yyyy-mm-dd hh:mm` format.
+- PDF section output now writes one merged markdown file per heading (no `-part-*` section files).
+- Section viewer now combines multi-part section files when reading legacy outputs created before merged-file mode.
+- Drag/drop target moved from a large panel to the `Select PDF` button to reduce occupied UI space.
+
 ## [0.5.0] - 2026-02-26
 
 ### Added
