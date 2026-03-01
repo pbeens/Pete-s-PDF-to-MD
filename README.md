@@ -2,6 +2,12 @@
 
 Open-source utility to convert PDF documents to high-quality Markdown for AI workflows.
 
+<p align="center">
+  <a href="images/petes-pdf-to-md-v0.7.0.png" target="_blank" rel="noopener noreferrer">
+    <img src="images/petes-pdf-to-md-v0.7.0.png" alt="Pete's PDF to MD GUI screenshot" width="75%">
+  </a>
+</p>
+
 ## Current Version
 
 `v0.7.0`
@@ -188,5 +194,3 @@ Notes:
 ## License
 
 This project is licensed under GPL-3.0. See `LICENSE`.
-
-
