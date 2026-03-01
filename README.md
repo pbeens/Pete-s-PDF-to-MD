@@ -1,5 +1,7 @@
 # Pete's PDF to MD
 
+Download the latest app from GitHub Releases: [https://github.com/pbeens/Pete-s-PDF-to-MD/releases](https://github.com/pbeens/Pete-s-PDF-to-MD/releases)
+
 Open-source utility to convert PDF documents to high-quality Markdown for AI workflows.
 
 <p align="center">
