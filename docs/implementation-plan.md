@@ -34,7 +34,7 @@ Once this is reliable on your sample PDFs, wire it into the Electron app as:
 1. Add a cross-platform CLI runner for local testing (`scripts/phase1.js` + `scripts/extract_outline.py`).
 2. Integrate Marker as the extraction backend and normalize heading output.
 3. Add heuristic cleanup (merge wrapped headers, drop false positives).
-4. Add split-export mode (`output/sections/*.md`).
+4. Add split-export modes (`single`, `By Major Heading`, `Sections`) with mode-specific output folders.
 5. Integrate same pipeline into Electron UI.
 
 ## Acceptance Criteria for Phase 1

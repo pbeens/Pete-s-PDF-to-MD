@@ -39,10 +39,24 @@
         <button id="pickOutputBtn">Change</button>
       </div>
       <div class="status-item status-conversion">
-        <label class="checkbox-label">
-          <input id="includeSectionMetaChk" type="checkbox" checked />
-          <span>Include section info in files</span>
-        </label>
+        <div class="conversion-options">
+          <label class="checkbox-label">
+            <input id="includeSectionMetaChk" type="checkbox" checked />
+            <span>Include section info in files</span>
+          </label>
+          <label class="checkbox-label">
+            <input id="autoRunOnSelectChk" type="checkbox" />
+            <span>Auto-run on PDF select</span>
+          </label>
+          <label class="mode-label" for="outputModeSel">
+            Output:
+            <select id="outputModeSel">
+              <option value="single">One file</option>
+              <option value="major">By major heading</option>
+              <option value="sections" selected>Individual sections</option>
+            </select>
+          </label>
+        </div>
       </div>
       <div class="status-item status-status">
         <span class="label">Status:</span>

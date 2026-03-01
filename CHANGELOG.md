@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.0] - 2026-03-01
+
+### Added
+
+- Conversion output mode options (GUI + pipeline):
+- `One file` (single merged markdown output), `By major heading` (one file per top-level heading group), and `Individual sections` (one file per heading; prior default behavior).
+- Section context menu action: `Copy path`.
+
+### Changed
+
+- Phase 1 extractor now supports output grouping via `--conversion-mode single|major|sections`.
+- Output files are now organized per mode:
+- `One file`: writes in the document output root (no subfolder)
+- `Individual sections`: writes to `Sections/`
+- `By major heading`: writes to `By Major Heading/`
+- In `One file` mode, output markdown filename now matches the source PDF basename (for example, `Science SNC1W.md`).
+- GUI conversion options now include output mode selection and persist locally between runs.
+- README and release docs updated for `v0.7.0`.
+
 ## [0.6.0] - 2026-02-27
 
 ### Added

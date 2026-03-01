@@ -117,7 +117,18 @@ function loadOutlinePayload(inputPdfPath, outputRootPath) {
     throw new Error('outline.json not found. Run conversion first.');
   }
 
-  const outlineItems = JSON.parse(fs.readFileSync(outlineJsonPath, 'utf8'));
+  const rawOutlineItems = JSON.parse(fs.readFileSync(outlineJsonPath, 'utf8'));
+  const outlineItems = Array.isArray(rawOutlineItems) ? rawOutlineItems.map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    const sectionRel = String(item.section_file || '').trim();
+    if (!sectionRel) return item;
+    const fullPath = path.resolve(outputDir, sectionRel);
+    const outputRootResolved = path.resolve(outputDir);
+    const isInsideOutput = fullPath.startsWith(outputRootResolved);
+    const exists = isInsideOutput && fs.existsSync(fullPath);
+    if (exists) return item;
+    return { ...item, section_file: null };
+  }) : [];
   const outlineMarkdown = safeRead(outlineMdPath);
 
   return {
@@ -364,6 +375,9 @@ ipcMain.handle('run-conversion', async (event, inputPdfPath, outputRootPath, con
   }
   const resolvedInputPdfPath = validatedInput.filePath;
   const includeSectionMetadata = conversionOptions?.includeSectionMetadata !== false;
+  const outputMode = ['single', 'major', 'sections'].includes(String(conversionOptions?.outputMode || ''))
+    ? String(conversionOptions.outputMode)
+    : 'sections';
 
   const scriptPath = path.join(getScriptsDir(), 'phase1.js');
   const outputRoot = normalizeOutputRoot(outputRootPath);
@@ -383,6 +397,7 @@ ipcMain.handle('run-conversion', async (event, inputPdfPath, outputRootPath, con
         '--input', resolvedInputPdfPath,
         '--out-dir', outputRoot,
         '--include-section-metadata', includeSectionMetadata ? '1' : '0',
+        '--conversion-mode', outputMode,
       ],
       {
         cwd: conversionCwd,
@@ -406,22 +421,37 @@ ipcMain.handle('run-conversion', async (event, inputPdfPath, outputRootPath, con
       let latestSectionFile = 'none';
       let latestSectionAgeSec = -1;
       try {
-        const sectionsDir = path.join(outputDir, 'sections');
-        if (fs.existsSync(sectionsDir)) {
-          const mdFiles = fs.readdirSync(sectionsDir).filter((name) => name.toLowerCase().endsWith('.md'));
-          sectionCount = mdFiles.length;
-          let newestMtimeMs = 0;
+        const candidateDirs = [
+          outputDir,
+          path.join(outputDir, 'Sections'),
+          path.join(outputDir, 'By Major Heading'),
+          path.join(outputDir, 'Per Major Headings'),
+          // Legacy names (pre-v0.7.0 folder naming)
+          path.join(outputDir, 'sections'),
+          path.join(outputDir, 'per-major-headings'),
+        ];
+        const visited = new Set();
+        let newestMtimeMs = 0;
+        for (const dirPath of candidateDirs) {
+          const resolvedDir = path.resolve(dirPath);
+          if (visited.has(resolvedDir) || !fs.existsSync(resolvedDir)) continue;
+          visited.add(resolvedDir);
+          const mdFiles = fs
+            .readdirSync(resolvedDir)
+            .filter((name) => name.toLowerCase().endsWith('.md'))
+            .filter((name) => !(resolvedDir === path.resolve(outputDir) && name.toLowerCase() === 'outline.md'));
+          sectionCount += mdFiles.length;
           for (const fileName of mdFiles) {
-            const fullPath = path.join(sectionsDir, fileName);
+            const fullPath = path.join(resolvedDir, fileName);
             const stat = fs.statSync(fullPath);
             if (stat.mtimeMs > newestMtimeMs) {
               newestMtimeMs = stat.mtimeMs;
-              latestSectionFile = fileName;
+              latestSectionFile = path.relative(outputDir, fullPath) || fileName;
             }
           }
-          if (newestMtimeMs > 0) {
-            latestSectionAgeSec = Math.max(0, Math.floor((Date.now() - newestMtimeMs) / 1000));
-          }
+        }
+        if (newestMtimeMs > 0) {
+          latestSectionAgeSec = Math.max(0, Math.floor((Date.now() - newestMtimeMs) / 1000));
         }
       } catch (_err) {
         // no-op

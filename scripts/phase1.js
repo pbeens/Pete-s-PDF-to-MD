@@ -10,6 +10,7 @@ function parseArgs(argv) {
     engine: 'auto',
     maxSectionChars: '8000',
     includeSectionMetadata: '1',
+    conversionMode: 'sections',
   };
 
   for (let i = 2; i < argv.length; i += 1) {
@@ -24,6 +25,8 @@ function parseArgs(argv) {
       opts.maxSectionChars = argv[++i] || '8000';
     } else if (arg === '--include-section-metadata') {
       opts.includeSectionMetadata = argv[++i] || '1';
+    } else if (arg === '--conversion-mode') {
+      opts.conversionMode = argv[++i] || 'sections';
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -51,7 +54,8 @@ function parseArgs(argv) {
 function printHelp() {
   console.log(
     'Usage: node scripts/phase1.js --input <file.pdf> [--out-dir output] '
-    + '[--engine auto|pymupdf] [--max-section-chars 8000] [--include-section-metadata 1|0]'
+    + '[--engine auto|pymupdf] [--max-section-chars 8000] '
+    + '[--include-section-metadata 1|0] [--conversion-mode single|major|sections]'
   );
 }
 
@@ -181,6 +185,7 @@ function run() {
       '--out-dir', opts.outDir,
       '--max-section-chars', String(opts.maxSectionChars),
       '--include-section-metadata', String(opts.includeSectionMetadata),
+      '--conversion-mode', String(opts.conversionMode),
     ],
     { stdio: 'inherit', windowsHide: true }
   );

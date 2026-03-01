@@ -4,7 +4,7 @@ Open-source utility to convert PDF documents to high-quality Markdown for AI wor
 
 ## Current Version
 
-`v0.6.0`
+`v0.7.0`
 
 ## Releases
 
@@ -31,11 +31,11 @@ Install PyMuPDF:
 3. Run unpackaged app for development:
    `npm run gui`
 4. Build release artifact (DMG):
-   `npm run release:prep -- --version 0.6.0 --build`
+   `npm run release:prep -- --version 0.7.0 --build`
 
 Release artifact:
 
-- `dist/Pete-s-PDF-to-MD-v0.6.0-macOS.dmg`
+- `dist/Pete-s-PDF-to-MD-v0.7.0-macOS.dmg`
 
 ### Windows (PowerShell)
 
@@ -90,7 +90,9 @@ Outputs:
 - `output/<pdf-name>/outline.json`
 - `output/<pdf-name>/outline.md`
 - `output/<pdf-name>/segments.json`
-- `output/<pdf-name>/sections/*.md` (one merged markdown file per heading)
+- `single` mode: `output/<pdf-name>/<pdf-name>.md` (root, no subfolder)
+- `sections` mode: `output/<pdf-name>/Sections/*.md` (one merged markdown file per heading)
+- `major` mode: `output/<pdf-name>/By Major Heading/*.md` (one merged markdown file per major heading)
 
 ## Extraction Accuracy
 
@@ -132,12 +134,14 @@ Current GUI features:
 - select a PDF file
 - drag and drop a PDF onto the `Select PDF` button
 - select output root folder
+- choose conversion output mode: `One file`, `By major heading`, or `Individual sections`
 - run conversion (calls existing `scripts/phase1.js`)
 - preview `outline.md`
 - browse sections from `outline.json`
 - view section markdown content
 - right-click section action: `Open in folder`
 - right-click section action: `Open in default program`
+- right-click section action: `Copy path`
 - open output folder
 
 Notes:
@@ -157,11 +161,11 @@ Notes:
 
 - This indicates an older packaged build.
 - Rebuild and reinstall using:
-  `npm run release:prep -- --version 0.6.0 --build`
+  `npm run release:prep -- --version 0.7.0 --build`
 
 ### "Conversion failed ... Output files are locked by another program"
 
-- Close any open files, previews, or editors under the output `sections/` folder.
+- Close any open files, previews, or editors under the output markdown folder for the selected mode.
 - Retry conversion after releasing file locks.
 
 ### "Conversion failed ... invalid/corrupt PDF"
@@ -179,7 +183,7 @@ Notes:
 ### "I only see a .app file after build"
 
 - `dist/mac-arm64/*.app` is an intermediate output.
-- Upload `dist/Pete-s-PDF-to-MD-v0.6.0-macOS.dmg` to GitHub Releases.
+- Upload `dist/Pete-s-PDF-to-MD-v0.7.0-macOS.dmg` to GitHub Releases.
 
 ## License
 

@@ -4,10 +4,13 @@ const state = {
   currentSectionPath: '',
   outlineItems: [],
   selectedSection: '',
+  selectedSubheading: '',
   currentSectionRaw: '',
   renderMarkdown: false,
   hideSectionMetaInPreview: false,
   includeSectionMetaInFiles: true,
+  autoRunOnSelect: false,
+  outputMode: 'sections',
   conversionDirty: false,
   activeConversionRunId: null,
   conversionStatusBase: '',
@@ -42,6 +45,8 @@ const sectionContentRenderedEl = document.getElementById('sectionContentRendered
 const renderMarkdownChk = document.getElementById('renderMarkdownChk');
 const hideSectionMetaChk = document.getElementById('hideSectionMetaChk');
 const includeSectionMetaChk = document.getElementById('includeSectionMetaChk');
+const autoRunOnSelectChk = document.getElementById('autoRunOnSelectChk');
+const outputModeSel = document.getElementById('outputModeSel');
 const buildStampEl = document.getElementById('buildStamp');
 const mainLayoutEl = document.getElementById('mainLayout');
 const outlinePanelEl = document.getElementById('outlinePanel');
@@ -54,6 +59,8 @@ const OUTLINE_COLLAPSE_KEY = 'pdf_to_md_outline_collapsed';
 const RENDER_MARKDOWN_KEY = 'pdf_to_md_render_markdown';
 const HIDE_SECTION_META_PREVIEW_KEY = 'pdf_to_md_hide_section_meta_preview';
 const INCLUDE_SECTION_META_FILES_KEY = 'pdf_to_md_include_section_meta_files';
+const AUTO_RUN_ON_SELECT_KEY = 'pdf_to_md_auto_run_on_select';
+const OUTPUT_MODE_KEY = 'pdf_to_md_output_mode';
 const ISSUES_URL = 'https://github.com/pbeens/Pete-s-PDF-to-MD/issues';
 const BUY_COFFEE_URL = 'https://buymeacoffee.com/pbeens';
 const REPO_URL = 'https://github.com/pbeens/Pete-s-PDF-to-MD';
@@ -194,6 +201,7 @@ function setBusy(busy) {
   pickPdfBtn.disabled = busy;
   pickOutputBtn.disabled = busy;
   openOutputBtn.disabled = busy || !state.inputPdfPath;
+  pickPdfBtn.textContent = busy && Boolean(state.activeConversionRunId) ? 'Loading...' : 'Select PDF';
   updateRunButtonState();
 }
 
@@ -244,12 +252,37 @@ function setInputPdfPath(filePath, options = {}) {
   renderPathDisplays();
   openOutputBtn.disabled = !state.inputPdfPath;
   if (!state.inputPdfPath) {
+    clearLoadedOutputViews();
     markConversionClean();
   } else if (changed || forceDirty) {
+    clearLoadedOutputViews();
     markConversionDirty('PDF selected');
   } else {
     updateRunButtonState();
   }
+}
+
+function clearLoadedOutputViews() {
+  state.outlineItems = [];
+  state.selectedSection = '';
+  renderSectionsList();
+  renderSectionPathDisplay('');
+  outlinePreviewEl.textContent = 'PDF selected. Click Run Conversion to load outline and sections.';
+  state.currentSectionRaw = 'No conversion loaded for this PDF yet.';
+  updateHideMetaControlState();
+  renderSectionContentView();
+}
+
+function triggerAutoRunIfEnabled() {
+  if (!state.autoRunOnSelect) return;
+  if (state.activeConversionRunId) return;
+  if (!state.inputPdfPath || !state.conversionDirty) return;
+  queueMicrotask(() => {
+    if (!state.autoRunOnSelect) return;
+    if (state.activeConversionRunId) return;
+    if (!state.inputPdfPath || !state.conversionDirty) return;
+    runBtn.click();
+  });
 }
 
 function getDropPayload(event) {
@@ -440,13 +473,60 @@ function updateSectionSelectionUI() {
     const sectionFile = btn.dataset.sectionFile || '';
     btn.classList.toggle('active', sectionFile === state.selectedSection);
   }
+  const subButtons = sectionsListEl.querySelectorAll('button[data-subheading-title]');
+  for (const btn of subButtons) {
+    const title = btn.dataset.subheadingTitle || '';
+    btn.classList.toggle('active', title === state.selectedSubheading);
+  }
+}
+
+function buildSectionGroups() {
+  const groups = [];
+  let currentGroup = null;
+  for (const item of state.outlineItems) {
+    if (item?.section_file) {
+      currentGroup = { root: item, children: [] };
+      groups.push(currentGroup);
+    } else if (currentGroup) {
+      currentGroup.children.push(item);
+    }
+  }
+  return groups;
+}
+
+function focusSubheadingInContent(title) {
+  const target = String(title || '').trim();
+  if (!target) return;
+
+  if (state.renderMarkdown && !sectionContentRenderedEl.hidden) {
+    const headings = sectionContentRenderedEl.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    for (const heading of headings) {
+      const text = String(heading.textContent || '').trim();
+      if (text === target || text.toLowerCase() === target.toLowerCase()) {
+        heading.scrollIntoView({ block: 'start' });
+        return;
+      }
+    }
+  }
+
+  const plain = String(sectionContentEl.textContent || '');
+  if (!plain) return;
+  const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lineMatch = plain.match(new RegExp(`^#{1,6}\\s+${escaped}\\s*$`, 'im'));
+  const index = lineMatch && Number.isInteger(lineMatch.index) ? lineMatch.index : plain.toLowerCase().indexOf(target.toLowerCase());
+  if (index < 0) return;
+  const before = plain.slice(0, index);
+  const ratio = Math.max(0, Math.min(1, before.length / Math.max(1, plain.length)));
+  const maxScroll = Math.max(0, sectionContentEl.scrollHeight - sectionContentEl.clientHeight);
+  sectionContentEl.scrollTop = Math.floor(maxScroll * ratio);
 }
 
 function renderSectionsList() {
   sectionsListEl.innerHTML = '';
   const baseLevel = sectionBaseLevel();
-  for (const item of state.outlineItems) {
-    if (!item.section_file) continue;
+  const groups = buildSectionGroups();
+  for (const group of groups) {
+    const item = group.root;
 
     const li = document.createElement('li');
     const btn = document.createElement('button');
@@ -455,7 +535,8 @@ function renderSectionsList() {
     btn.dataset.sectionFile = item.section_file;
     btn.addEventListener('click', () => {
       state.selectedSection = item.section_file;
-      updateSectionSelectionUI();
+      state.selectedSubheading = '';
+      renderSectionsList();
       closeSectionContextMenu();
       void loadSection(item.section_file);
     });
@@ -472,6 +553,36 @@ function renderSectionsList() {
     btn.appendChild(title);
 
     li.appendChild(btn);
+
+    const showChildren = item.section_file === state.selectedSection && Array.isArray(group.children) && group.children.length > 0;
+    if (showChildren) {
+      const childList = document.createElement('ul');
+      childList.className = 'subheading-list';
+      const rootSectionFile = item.section_file;
+      for (const child of group.children) {
+        const childLi = document.createElement('li');
+        const childBtn = document.createElement('button');
+        childBtn.type = 'button';
+        childBtn.className = 'subheading-item';
+        childBtn.dataset.subheadingTitle = String(child?.title || '');
+        childBtn.textContent = String(child?.title || '(untitled)');
+        childBtn.addEventListener('click', () => {
+          const subheadingTitle = String(child?.title || '').trim();
+          state.selectedSubheading = subheadingTitle;
+          updateSectionSelectionUI();
+          if (state.selectedSection !== rootSectionFile) {
+            state.selectedSection = rootSectionFile;
+            void loadSection(rootSectionFile).then(() => focusSubheadingInContent(subheadingTitle));
+          } else {
+            focusSubheadingInContent(subheadingTitle);
+          }
+        });
+        childLi.appendChild(childBtn);
+        childList.appendChild(childLi);
+      }
+      li.appendChild(childList);
+    }
+
     sectionsListEl.appendChild(li);
   }
   updateSectionSelectionUI();
@@ -623,12 +734,11 @@ async function refreshOutline() {
   if (!firstSection) {
     renderSectionPathDisplay('');
     state.currentSectionRaw = 'No section files available for this conversion result.';
+    renderSectionContentView();
   } else {
-    renderSectionPathDisplay('');
-    state.currentSectionRaw = 'Select a section to preview content.';
+    await loadSection(firstSection);
   }
   updateHideMetaControlState();
-  renderSectionContentView();
   setStatus('Ready');
 }
 
@@ -643,6 +753,7 @@ pickPdfBtn.addEventListener('click', async () => {
     }
     setInputPdfPath(result.filePath, { forceDirty: true });
     setStatus('PDF selected');
+    triggerAutoRunIfEnabled();
   } catch (err) {
     setStatus('Error');
     alert(`Failed to select PDF: ${toUserErrorMessage(err, 'Could not select a PDF file.')}`);
@@ -691,6 +802,7 @@ if (inputDropZoneEl) {
 
     setInputPdfPath(validation.filePath, { forceDirty: true });
     setStatus('PDF selected');
+    triggerAutoRunIfEnabled();
   });
 }
 
@@ -718,10 +830,11 @@ runBtn.addEventListener('click', async () => {
   void withTimeout(
     window.pdfToMdApi.runConversion(state.inputPdfPath, state.outputRootPath, {
       includeSectionMetadata: state.includeSectionMetaInFiles,
+      outputMode: state.outputMode,
     }),
     RUN_CONVERSION_TIMEOUT_MS,
     'Running conversion'
-  ).then((payload) => {
+  ).then(async (payload) => {
     if (state.activeConversionRunId !== runId) return;
     state.outlineItems = payload.outlineItems || [];
     if (payload.outlineMarkdown && payload.outlineMarkdown.trim()) {
@@ -737,11 +850,10 @@ runBtn.addEventListener('click', async () => {
     if (!firstSection) {
       renderSectionPathDisplay('');
       state.currentSectionRaw = 'No section files available for this conversion result.';
+      renderSectionContentView();
     } else {
-      renderSectionPathDisplay('');
-      state.currentSectionRaw = 'Conversion complete. Select a section to preview content.';
+      await loadSection(firstSection);
     }
-    renderSectionContentView();
     markConversionClean();
     setStatus('Conversion complete');
   }).catch((err) => {
@@ -860,6 +972,37 @@ if (includeSectionMetaChk) {
   });
 }
 
+if (autoRunOnSelectChk) {
+  autoRunOnSelectChk.addEventListener('change', () => {
+    state.autoRunOnSelect = Boolean(autoRunOnSelectChk.checked);
+    try {
+      localStorage.setItem(AUTO_RUN_ON_SELECT_KEY, state.autoRunOnSelect ? '1' : '0');
+    } catch (_err) {
+      // no-op
+    }
+  });
+}
+
+if (outputModeSel) {
+  outputModeSel.addEventListener('change', () => {
+    const nextValue = String(outputModeSel.value || 'sections');
+    const valid = ['single', 'major', 'sections'].includes(nextValue) ? nextValue : 'sections';
+    const changed = valid !== state.outputMode;
+    state.outputMode = valid;
+    outputModeSel.value = state.outputMode;
+    try {
+      localStorage.setItem(OUTPUT_MODE_KEY, state.outputMode);
+    } catch (_err) {
+      // no-op
+    }
+    if (changed && state.inputPdfPath) {
+      markConversionDirty('Conversion options changed');
+    } else {
+      updateRunButtonState();
+    }
+  });
+}
+
 document.addEventListener('click', (event) => {
   if (supportMenuWrapEl && supportMenuEl && !supportMenuEl.hidden) {
     if (!supportMenuWrapEl.contains(event.target)) {
@@ -908,6 +1051,28 @@ document.addEventListener('click', (event) => {
     }
     if (includeSectionMetaChk) {
       includeSectionMetaChk.checked = state.includeSectionMetaInFiles;
+    }
+
+    try {
+      const savedAutoRun = localStorage.getItem(AUTO_RUN_ON_SELECT_KEY);
+      state.autoRunOnSelect = savedAutoRun === '1';
+    } catch (_err) {
+      state.autoRunOnSelect = false;
+    }
+    if (autoRunOnSelectChk) {
+      autoRunOnSelectChk.checked = state.autoRunOnSelect;
+    }
+
+    try {
+      const savedOutputMode = localStorage.getItem(OUTPUT_MODE_KEY);
+      state.outputMode = ['single', 'major', 'sections'].includes(String(savedOutputMode || ''))
+        ? String(savedOutputMode)
+        : 'sections';
+    } catch (_err) {
+      state.outputMode = 'sections';
+    }
+    if (outputModeSel) {
+      outputModeSel.value = state.outputMode;
     }
 
     if (typeof window.pdfToMdApi.onConversionProgress === 'function') {

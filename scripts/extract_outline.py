@@ -243,7 +243,9 @@ def format_dot_leader_blocks(text: str) -> str:
     lines = text.splitlines()
     out = []
     i = 0
-    item_re = re.compile(r"^\s*(.+?)\s*\.{3,}\s*<sup>(\d{1,3})</sup>\s*$")
+    item_re = re.compile(
+        r"^\s*(.+?)\s*(?:\.{3,}|(?:\.\s*){3,})\s*(?:<sup>)?(\d{1,3})(?:</sup>)?\s*$"
+    )
 
     while i < len(lines):
         j = i
@@ -263,7 +265,7 @@ def format_dot_leader_blocks(text: str) -> str:
             rows.append((m.group(1).strip(), m.group(2)))
             j += 1
 
-        if len(rows) >= 4:
+        if len(rows) >= 3:
             out.append("| Section | Page |")
             out.append("|---|---:|")
             for title, page in rows:
@@ -727,14 +729,28 @@ def page_blocks(page, y_min=None, y_max=None):
 
     return [block for block in output_blocks if clean_line(block)]
 
-def prepare_output_dirs(out_dir: Path) -> Path:
+def prepare_output_dirs(out_dir: Path, conversion_mode: str) -> tuple[Path, str]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    sections_dir = out_dir / "sections"
-    sections_dir.mkdir(parents=True, exist_ok=True)
+
+    if conversion_mode == "sections":
+        target_dir = out_dir / "Sections"
+        relative_prefix = "Sections/"
+    elif conversion_mode == "major":
+        target_dir = out_dir / "By Major Heading"
+        relative_prefix = "By Major Heading/"
+    elif conversion_mode == "single":
+        target_dir = out_dir
+        relative_prefix = ""
+    else:
+        raise ValueError(f"Unsupported conversion mode: {conversion_mode}")
+
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     # Avoid removing the whole output tree on Windows: open handles (editors/previewers)
-    # can lock files and make shutil.rmtree fail with WinError 32.
-    for existing in sections_dir.glob("*.md"):
+    # can lock files and make cleanup fail with WinError 32.
+    for existing in target_dir.glob("*.md"):
+        if conversion_mode == "single" and existing.name.lower() == "outline.md":
+            continue
         try:
             existing.unlink()
         except PermissionError as err:
@@ -743,7 +759,7 @@ def prepare_output_dirs(out_dir: Path) -> Path:
                 "Close any open section files or preview windows and retry."
             ) from err
 
-    return sections_dir
+    return target_dir, relative_prefix
 
 
 def cleanup_section_body(body: str, title: str, next_title: str | None = None) -> str:
@@ -784,8 +800,33 @@ def cleanup_section_body(body: str, title: str, next_title: str | None = None) -
     return out
 
 
-def write_outputs(doc, outline, out_dir: Path, max_section_chars: int, include_section_metadata: bool):
-    sections_dir = prepare_output_dirs(out_dir)
+def build_section_markdown(title: str, level: int, start: int, end: int, source: str, body: str, include_section_metadata: bool) -> str:
+    md_level = max(1, min(6, int(level)))
+    heading_prefix = "#" * md_level
+    if include_section_metadata:
+        metadata_block = (
+            f"- Level: {level}\n"
+            f"- Pages: {start}-{end}\n"
+            f"- Source: {source}\n\n"
+        )
+    else:
+        metadata_block = ""
+    return (
+        f"{heading_prefix} {title}\n\n"
+        f"{metadata_block}"
+        f"{body}\n"
+    )
+
+
+def write_outputs(
+    doc,
+    outline,
+    out_dir: Path,
+    max_section_chars: int,
+    include_section_metadata: bool,
+    conversion_mode: str,
+):
+    output_md_dir, output_rel_prefix = prepare_output_dirs(out_dir, conversion_mode)
 
     normalized = []
     for idx, item in enumerate(outline, start=1):
@@ -869,55 +910,167 @@ def write_outputs(doc, outline, out_dir: Path, max_section_chars: int, include_s
     numbering_depth = max(3, min(6, max_level_in_doc))
     level_counters = [0] * numbering_depth
 
-    segments = []
-    total_rows = len(section_rows)
+    code_by_index = {}
     for row in section_rows:
         i = row["index"]
         current = normalized[i]
-        current_title = clean_line(current.get("title", ""))[:80]
-        print(f"PROGRESS: Writing section markdown {i + 1}/{total_rows}: {current_title}", flush=True)
-        start = row["start"]
-        end = row["end"]
-        body = row["body"]
-
         current_level = max(1, min(numbering_depth, int(current["level"])))
         for depth_i in range(current_level, numbering_depth):
             level_counters[depth_i] = 0
         level_counters[current_level - 1] += 1
-        section_code = ".".join(str(level_counters[idx]) for idx in range(numbering_depth))
+        code_by_index[i] = ".".join(str(level_counters[idx]) for idx in range(numbering_depth))
 
+        body = row["body"]
         current["line_count"] = len([line for line in body.splitlines() if line.strip()])
         current["char_count"] = len(body)
-        file_name = f"{section_code}-{slugify(current['title'])}.md"
-        section_path = f"sections/{file_name}"
-        current["section_file"] = section_path
-        md_level = max(1, min(6, int(current["level"])))
-        heading_prefix = "#" * md_level
-        if include_section_metadata:
-            metadata_block = (
-                f"- Level: {current['level']}\n"
-                f"- Pages: {start}-{end}\n"
-                f"- Source: {current['source']}\n\n"
+        current["section_file"] = None
+
+    segments = []
+    total_rows = len(section_rows)
+
+    if conversion_mode == "sections":
+        for row in section_rows:
+            i = row["index"]
+            current = normalized[i]
+            current_title = clean_line(current.get("title", ""))[:80]
+            print(f"PROGRESS: Writing section markdown {i + 1}/{total_rows}: {current_title}", flush=True)
+            start = row["start"]
+            end = row["end"]
+            body = row["body"]
+
+            section_code = code_by_index[i]
+            file_name = f"{section_code}-{slugify(current['title'])}.md"
+            section_path = f"{output_rel_prefix}{file_name}"
+            current["section_file"] = section_path
+            markdown = build_section_markdown(
+                current["title"],
+                int(current["level"]),
+                int(start),
+                int(end),
+                current["source"],
+                body,
+                include_section_metadata,
             )
-        else:
-            metadata_block = ""
-        markdown = (
-            f"{heading_prefix} {current['title']}\n\n"
-            f"{metadata_block}"
-            f"{body}\n"
-        )
-        (sections_dir / file_name).write_text(markdown, encoding="utf-8")
+            (output_md_dir / file_name).write_text(markdown, encoding="utf-8")
+            segments.append(
+                {
+                    "id": f"s{len(segments)+1}",
+                    "title": current["title"],
+                    "level": current["level"],
+                    "page_start": start,
+                    "page_end": end,
+                    "file": section_path,
+                    "char_count": len(body),
+                }
+            )
+    elif conversion_mode == "major":
+        levels = [int(item["level"]) for item in normalized] or [1]
+        level_counts = {}
+        for lvl in levels:
+            level_counts[lvl] = level_counts.get(lvl, 0) + 1
+        multi_levels = sorted([lvl for lvl, cnt in level_counts.items() if cnt >= 2])
+        major_level = multi_levels[0] if multi_levels else min(levels)
+        major_indices = [idx for idx, item in enumerate(normalized) if int(item["level"]) == major_level]
+        if not major_indices:
+            major_indices = [0]
+
+        rows_by_major = {idx: [] for idx in major_indices}
+        active_major = major_indices[0]
+        major_set = set(major_indices)
+        for row in section_rows:
+            idx = row["index"]
+            if idx in major_set:
+                active_major = idx
+            rows_by_major.setdefault(active_major, []).append(row)
+
+        for major_idx in major_indices:
+            grouped_rows = rows_by_major.get(major_idx, [])
+            if not grouped_rows:
+                continue
+            current = normalized[major_idx]
+            current_title = clean_line(current.get("title", ""))[:80]
+            print(
+                f"PROGRESS: Writing major-heading markdown {major_idx + 1}/{len(normalized)}: {current_title}",
+                flush=True,
+            )
+
+            section_code = code_by_index.get(major_idx, "0.0.0")
+            file_name = f"{section_code}-{slugify(current['title'])}.md"
+            section_path = f"{output_rel_prefix}{file_name}"
+            current["section_file"] = section_path
+
+            chunk_markdown = []
+            total_chars = 0
+            page_start = grouped_rows[0]["start"]
+            page_end = grouped_rows[-1]["end"]
+            for row in grouped_rows:
+                idx = row["index"]
+                entry = normalized[idx]
+                body = row["body"]
+                total_chars += len(body)
+                chunk_markdown.append(
+                    build_section_markdown(
+                        entry["title"],
+                        int(entry["level"]),
+                        int(row["start"]),
+                        int(row["end"]),
+                        entry["source"],
+                        body,
+                        include_section_metadata,
+                    ).strip()
+                )
+            (output_md_dir / file_name).write_text("\n\n".join(chunk_markdown) + "\n", encoding="utf-8")
+            segments.append(
+                {
+                    "id": f"s{len(segments)+1}",
+                    "title": current["title"],
+                    "level": current["level"],
+                    "page_start": page_start,
+                    "page_end": page_end,
+                    "file": section_path,
+                    "char_count": total_chars,
+                }
+            )
+    elif conversion_mode == "single":
+        file_name = f"{out_dir.name}.md"
+        section_path = f"{output_rel_prefix}{file_name}"
+        if normalized:
+            normalized[0]["section_file"] = section_path
+
+        chunk_markdown = []
+        total_chars = 0
+        page_start = section_rows[0]["start"] if section_rows else 1
+        page_end = section_rows[-1]["end"] if section_rows else doc.page_count
+        for row in section_rows:
+            idx = row["index"]
+            entry = normalized[idx]
+            body = row["body"]
+            total_chars += len(body)
+            chunk_markdown.append(
+                build_section_markdown(
+                    entry["title"],
+                    int(entry["level"]),
+                    int(row["start"]),
+                    int(row["end"]),
+                    entry["source"],
+                    body,
+                    include_section_metadata,
+                ).strip()
+            )
+        (output_md_dir / file_name).write_text("\n\n".join(chunk_markdown) + "\n", encoding="utf-8")
         segments.append(
             {
-                "id": f"s{len(segments)+1}",
-                "title": current["title"],
-                "level": current["level"],
-                "page_start": start,
-                "page_end": end,
+                "id": "s1",
+                "title": "Document",
+                "level": 1,
+                "page_start": page_start,
+                "page_end": page_end,
                 "file": section_path,
-                "char_count": len(body),
+                "char_count": total_chars,
             }
         )
+    else:
+        raise ValueError(f"Unsupported conversion mode: {conversion_mode}")
 
     (out_dir / "outline.json").write_text(json.dumps(normalized, indent=2), encoding="utf-8")
     (out_dir / "segments.json").write_text(json.dumps(segments, indent=2), encoding="utf-8")
@@ -950,6 +1103,12 @@ def main():
         default=1,
         help="Include section metadata header lines (Level/Pages/Source) in output markdown files",
     )
+    parser.add_argument(
+        "--conversion-mode",
+        choices=["single", "major", "sections"],
+        default="sections",
+        help="Output grouping mode: single file, per-major-heading, or per-section",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input).expanduser().resolve()
@@ -976,6 +1135,7 @@ def main():
         out_dir,
         args.max_section_chars,
         bool(args.include_section_metadata),
+        args.conversion_mode,
     )
     print("PROGRESS: Finalizing output indexes", flush=True)
 
