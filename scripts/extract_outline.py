@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import argparse
+import difflib
 import json
 import math
 import re
@@ -60,6 +61,69 @@ def normalize_match_text(value: str) -> str:
     value = re.sub(r"<[^>]+>", " ", value)
     value = re.sub(r"[^a-z0-9]+", " ", value)
     return clean_line(value)
+
+
+def repair_mojibake(text: str) -> str:
+    replacements = {
+        "ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢": "â€¢",
+        "Ã¢â‚¬Â¢": "â€¢",
+        "Ã¢â‚¬â€œ": "â€“",
+        "Ã¢â‚¬â€": "â€”",
+        "Ã¢â‚¬Ëœ": "â€˜",
+        "Ã¢â‚¬â„¢": "â€™",
+        "Ã¢â‚¬Å“": "â€œ",
+        "Ã¢â‚¬Â": "â€",
+        "Ã¢â‚¬Â¦": "â€¦",
+        "Ã‚ ": " ",
+        "Ã‚": "",
+    }
+    out = text
+    for bad, good in replacements.items():
+        out = out.replace(bad, good)
+    return out
+
+
+def normalize_outline(outline: list[dict]) -> list[dict]:
+    if not outline:
+        return outline
+
+    cleaned = []
+    recent_entries = []
+    prev_level = 1
+    last_page = 1
+
+    for item in outline:
+        title = clean_line(item.get("title", ""))
+        if not title:
+            continue
+        title_norm = normalize_match_text(title)
+        page_start = max(last_page, int(item.get("page_start") or last_page))
+        level = max(1, int(item.get("level") or 1))
+        if cleaned:
+            level = min(level, prev_level + 1)
+
+        is_near_repeat = any(
+            prev_title == title_norm and abs(page_start - prev_page) <= 2
+            for prev_title, prev_page in recent_entries[-8:]
+        )
+        same_page_repeat = (
+            bool(cleaned)
+            and cleaned[-1]["page_start"] == page_start
+            and normalize_match_text(cleaned[-1]["title"]) == title_norm
+        )
+        if same_page_repeat or is_near_repeat:
+            continue
+
+        row = dict(item)
+        row["title"] = title
+        row["page_start"] = page_start
+        row["level"] = level
+        cleaned.append(row)
+        recent_entries.append((title_norm, page_start))
+        prev_level = level
+        last_page = page_start
+
+    return cleaned
 
 
 def build_margin_noise_profile(doc):
@@ -235,7 +299,7 @@ def build_outline_heuristic(doc):
         text = row["text"]
         if len(text) < 4 or len(text) > 120:
             continue
-        if text.startswith(("•", "-", "*")):
+        if text.startswith(("â€¢", "-", "*")):
             continue
         if row["size"] < cutoff:
             continue
@@ -326,9 +390,9 @@ def build_outline_heuristic(doc):
 
 
 def improve_readability(text: str) -> str:
-    out = text
+    out = repair_mojibake(text)
     out = re.sub(r"(?im)^\W*extract\s+\d+\s*", "", out)
-    out = re.sub(r"(?im)^[-*•]\s*", "- ", out)
+    out = re.sub(r"(?im)^[-*\u2022]\s*", "- ", out)
     # Plain inline marker: "Parents 1 play ..." -> "Parents <sup>1</sup> play ..."
     out = re.sub(r"(?<=\w)\s(\d{1,3})(?=\s+[a-z])", r" <sup>\1</sup>", out)
     # Footnote markers at the beginning of a line: "1 The word..." -> "<sup>1</sup> The word..."
@@ -338,7 +402,6 @@ def improve_readability(text: str) -> str:
     out = re.sub(r"([;:,\.\)])(\d{1,3})(?=\s)", r"\1<sup>\2</sup>", out)
     out = re.sub(r"\n{3,}", "\n\n", out)
     return out
-
 
 def attach_missing_footnote_markers(text: str) -> str:
     paragraphs = [p for p in text.split("\n\n") if p.strip()]
@@ -527,7 +590,7 @@ def fix_as_follows_bullet_lists(text: str) -> str:
     lines = text.splitlines()
     out = []
     i = 0
-    strand_line_re = re.compile(r"^\s*(?:[-*]\s+)?([A-Z]\.\s+.+?)\s*(?:â€¢|•)?\s*$")
+    strand_line_re = re.compile(r"^\s*(?:[-*]\s+)?([A-Z]\.\s+.+?)\s*(?:\u2022)?\s*$")
 
     while i < len(lines):
         out.append(lines[i])
@@ -615,6 +678,114 @@ def strip_footnote_prefix_from_table_rows(text: str) -> str:
     # Footnote markers sometimes bleed into the first table row as:
     # "<sup>19</sup> | ...", which breaks markdown table parsing.
     return re.sub(r"(?m)^<sup>\d{1,3}</sup>\s+(?=\|)", "", text)
+
+
+def strip_inline_sup_markers(text: str) -> str:
+    out = re.sub(r"</?sup>", "", text)
+    out = re.sub(r"(?m)^\s*\d{1,3}\s+(?=\|)", "", out)
+    return out
+
+
+def split_inline_bullet_runs(text: str) -> str:
+    lines = text.splitlines()
+    out = []
+    for raw in lines:
+        line = raw.strip()
+        if (
+            not line
+            or line.startswith("#")
+            or line.startswith("|")
+            or line.startswith("* ")
+        ):
+            out.append(raw)
+            continue
+
+        working = line
+        if working.startswith("- "):
+            working = working[2:].strip()
+
+        if "•" not in working:
+            out.append(raw)
+            continue
+
+        parts = [clean_line(p) for p in re.split(r"\s*•\s*", working) if clean_line(p)]
+        if len(parts) < 2:
+            out.append(raw)
+            continue
+        out.extend([f"- {part}" for part in parts])
+    return "\n".join(out)
+
+
+def strip_remaining_bullet_glyphs(text: str) -> str:
+    out = re.sub(r"\s*•\s*", " ", text)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return out
+
+
+def deduplicate_body_paragraphs(text: str) -> str:
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if not paragraphs:
+        return text
+
+    kept = []
+    seen_exact = set()
+    seen_by_prefix = {}
+
+    def is_candidate(para: str) -> bool:
+        if para.startswith("|") or para.startswith("#"):
+            return False
+        if para.startswith("- Level:") or para.startswith("- Pages:") or para.startswith("- Source:"):
+            return False
+        return len(para) >= 80 and len(para.split()) >= 12
+
+    for para in paragraphs:
+        norm = normalize_match_text(para)
+        if not norm:
+            continue
+        if not is_candidate(para):
+            kept.append(para)
+            continue
+
+        if norm in seen_exact:
+            continue
+
+        prefix = " ".join(norm.split()[:10])
+        near_dup = False
+        for prev in seen_by_prefix.get(prefix, []):
+            if difflib.SequenceMatcher(None, prev, norm).ratio() >= 0.94:
+                near_dup = True
+                break
+        if near_dup:
+            continue
+
+        seen_exact.add(norm)
+        seen_by_prefix.setdefault(prefix, []).append(norm)
+        kept.append(para)
+
+    if not kept:
+        return "(No extractable text in this range.)"
+    return "\n\n".join(kept)
+
+
+def build_toc_markdown_table(rows: list[dict]) -> str:
+    if not rows:
+        return ""
+
+    table = ["## Table of Contents", "", "| Section | Page |", "|---|---:|"]
+    seen = set()
+    for row in rows:
+        title = clean_line(row.get("title", ""))
+        page = int(row.get("start") or row.get("page_start") or 1)
+        if not title:
+            continue
+        sig = (normalize_match_text(title), page)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        safe_title = title.replace("|", "\\|")
+        table.append(f"| {safe_title} | {page} |")
+    table.append("")
+    return "\n".join(table)
 
 
 def stitch_orphan_continuations(text: str) -> str:
@@ -1046,6 +1217,7 @@ def write_outputs(
                 "section_file": None,
             }
         )
+    normalized = normalize_outline(normalized)
 
     # Preserve content that appears before the first detected heading
     # (e.g., title pages, foreword, or top-of-page text before first TOC anchor).
@@ -1134,6 +1306,10 @@ def write_outputs(
         body = remove_redundant_table_header_lines(body)
         body = remove_duplicate_markdown_table_headers(body)
         body = strip_footnote_prefix_from_table_rows(body)
+        body = split_inline_bullet_runs(body)
+        body = strip_remaining_bullet_glyphs(body)
+        body = strip_inline_sup_markers(body)
+        body = deduplicate_body_paragraphs(body)
         section_rows.append(
             {
                 "index": i,
@@ -1148,6 +1324,8 @@ def write_outputs(
 
     rebalance_cross_section_footnotes(section_rows)
     remove_orphan_markers_after_rebalance(section_rows)
+    for row in section_rows:
+        row["body"] = deduplicate_body_paragraphs(row["body"])
 
     max_level_in_doc = max((int(item["level"]) for item in normalized), default=1)
     numbering_depth = max(3, min(6, max_level_in_doc))
@@ -1281,6 +1459,9 @@ def write_outputs(
             normalized[0]["section_file"] = section_path
 
         chunk_markdown = []
+        toc_table = build_toc_markdown_table(section_rows)
+        if toc_table:
+            chunk_markdown.append(toc_table.strip())
         total_chars = 0
         page_start = section_rows[0]["start"] if section_rows else 1
         page_end = section_rows[-1]["end"] if section_rows else doc.page_count
@@ -1370,6 +1551,7 @@ def main():
         outline = build_outline_heuristic(doc)
     if not outline:
         outline = [{"level": 1, "title": "Document", "page_start": 1, "source": "fallback"}]
+    outline = normalize_outline(outline)
 
     base = input_path.stem
     out_dir = Path(args.out_dir).expanduser().resolve() / base
@@ -1393,4 +1575,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
 
