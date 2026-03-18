@@ -47,6 +47,7 @@ const hideSectionMetaChk = document.getElementById('hideSectionMetaChk');
 const includeSectionMetaChk = document.getElementById('includeSectionMetaChk');
 const autoRunOnSelectChk = document.getElementById('autoRunOnSelectChk');
 const outputModeSel = document.getElementById('outputModeSel');
+const sectionsHintNoteEl = document.getElementById('sectionsHintNote');
 const buildStampEl = document.getElementById('buildStamp');
 const mainLayoutEl = document.getElementById('mainLayout');
 const outlinePanelEl = document.getElementById('outlinePanel');
@@ -586,6 +587,14 @@ function renderSectionsList() {
     sectionsListEl.appendChild(li);
   }
   updateSectionSelectionUI();
+  updateSectionsHintVisibility();
+}
+
+function updateSectionsHintVisibility() {
+  if (!sectionsHintNoteEl) return;
+  const sectionCount = state.outlineItems.filter((item) => item?.section_file).length;
+  const showHint = state.outputMode !== 'single' && sectionCount > 1;
+  sectionsHintNoteEl.hidden = !showHint;
 }
 
 function stripSectionMetadataHeader(markdownText) {
@@ -1000,6 +1009,7 @@ if (outputModeSel) {
     } else {
       updateRunButtonState();
     }
+    updateSectionsHintVisibility();
   });
 }
 
@@ -1109,6 +1119,7 @@ document.addEventListener('click', (event) => {
   }
   setStatus('Idle');
   updateRunButtonState();
+  updateSectionsHintVisibility();
   outlinePreviewEl.textContent = 'Select a PDF and click Run Conversion.';
   state.currentSectionRaw = 'Section content will appear here.';
   updateHideMetaControlState();

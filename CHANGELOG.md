@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.1] - Unreleased
+
+### Added
+
+- README quick-start download link to GitHub Releases.
+- README GUI screenshot image for the app.
+
+### Changed
+
+- Release version baseline set to `v0.7.1`.
+- Section hint text ("Right-click a section for options.") now auto-hides when it is not applicable (for example, single-file mode or only one section).
+- TOC extraction now infers heading `y` anchors from page text when embedded TOC positions are missing.
+- Section boundary handling improved to avoid overlapping content when consecutive headings have ambiguous same-page boundaries.
+- Conversion now preserves content before the first detected heading as synthetic `Front Matter` when needed.
+- Repeated page-margin noise (running headers/footers) and page-number footers are filtered from extracted content.
+- Post-processing now better normalizes list/table output:
+- Avoids converting table-leading row numbers into footnote superscripts.
+- Converts "as follows:" strand lines into markdown bullets.
+- Removes stray `<sup>n</sup>` prefixes that can break markdown table rows.
+
 ## [0.7.0] - 2026-03-01
 
 ### Added

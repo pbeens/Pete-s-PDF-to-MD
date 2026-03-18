@@ -55,6 +55,143 @@ def build_outline_from_toc(doc):
     return entries
 
 
+def normalize_match_text(value: str) -> str:
+    value = clean_line(str(value or "")).lower()
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return clean_line(value)
+
+
+def build_margin_noise_profile(doc):
+    top_counts = {}
+    bottom_counts = {}
+    min_repeat = max(3, int(math.ceil(doc.page_count * 0.15)))
+
+    for page_no in range(1, doc.page_count + 1):
+        page = doc.load_page(page_no - 1)
+        payload = page.get_text("dict")
+        page_height = float(page.rect.height)
+        top_band = page_height * 0.10
+        bottom_band = page_height * 0.90
+
+        for block in payload.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                parts = []
+                for span in line.get("spans", []):
+                    text = clean_line(span.get("text", ""))
+                    if text:
+                        parts.append(text)
+                merged = clean_line(" ".join(parts))
+                if not merged:
+                    continue
+
+                bbox = line.get("bbox", [0, 0, 0, 0])
+                y0 = float(bbox[1])
+                y1 = float(bbox[3])
+                norm = normalize_match_text(merged)
+                if not norm:
+                    continue
+
+                if y0 <= top_band:
+                    top_counts.setdefault(norm, set()).add(page_no)
+                if y1 >= bottom_band:
+                    bottom_counts.setdefault(norm, set()).add(page_no)
+
+    repeated_top = {text for text, pages in top_counts.items() if len(pages) >= min_repeat and len(text) >= 4}
+    repeated_bottom = {text for text, pages in bottom_counts.items() if len(pages) >= min_repeat and len(text) >= 4}
+    return {"top": repeated_top, "bottom": repeated_bottom}
+
+
+def infer_toc_heading_positions(doc, outline):
+    if not outline:
+        return outline
+
+    lines_by_page = {}
+
+    def page_lines(page_no: int):
+        if page_no in lines_by_page:
+            return lines_by_page[page_no]
+
+        page = doc.load_page(page_no - 1)
+        payload = page.get_text("dict")
+        rows = []
+        for block in payload.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                parts = []
+                for span in line.get("spans", []):
+                    text = clean_line(span.get("text", ""))
+                    if text:
+                        parts.append(text)
+                merged = clean_line(" ".join(parts))
+                if not merged:
+                    continue
+                y0 = float(line.get("bbox", [0, 0, 0, 0])[1])
+                rows.append(
+                    {
+                        "y0": y0,
+                        "text": merged,
+                        "norm": normalize_match_text(merged),
+                    }
+                )
+
+        rows.sort(key=lambda item: item["y0"])
+        lines_by_page[page_no] = rows
+        return rows
+
+    grouped = {}
+    for idx, entry in enumerate(outline):
+        page_no = int(entry.get("page_start") or 1)
+        grouped.setdefault(page_no, []).append(idx)
+
+    for page_no, indices in grouped.items():
+        rows = page_lines(page_no)
+        if not rows:
+            continue
+
+        last_y = -1e9
+        for idx in indices:
+            entry = outline[idx]
+            if entry.get("y0") is not None:
+                last_y = float(entry["y0"])
+                continue
+
+            title_norm = normalize_match_text(entry.get("title", ""))
+            if not title_norm:
+                continue
+
+            candidates = []
+            for row in rows:
+                row_norm = row["norm"]
+                if not row_norm:
+                    continue
+                exact = row_norm == title_norm
+                contains = title_norm in row_norm and len(title_norm) >= 6
+                contained_by = row_norm in title_norm and len(row_norm) >= 8
+                if exact or contains or contained_by:
+                    after_prev = row["y0"] >= (last_y - 0.5)
+                    score = (
+                        0 if exact else 1,
+                        0 if after_prev else 1,
+                        abs(row["y0"] - max(last_y, 0.0)),
+                        row["y0"],
+                    )
+                    candidates.append((score, row))
+
+            if not candidates:
+                continue
+
+            candidates.sort(key=lambda item: item[0])
+            chosen = candidates[0][1]
+            entry["y0"] = float(chosen["y0"])
+            last_y = float(chosen["y0"])
+
+    return outline
+
+
 def build_outline_heuristic(doc):
     spans = []
     for page_index in range(doc.page_count):
@@ -195,7 +332,8 @@ def improve_readability(text: str) -> str:
     # Plain inline marker: "Parents 1 play ..." -> "Parents <sup>1</sup> play ..."
     out = re.sub(r"(?<=\w)\s(\d{1,3})(?=\s+[a-z])", r" <sup>\1</sup>", out)
     # Footnote markers at the beginning of a line: "1 The word..." -> "<sup>1</sup> The word..."
-    out = re.sub(r"(?m)^(\d{1,3})\s+", r"<sup>\1</sup> ", out)
+    # Avoid converting table-like rows such as "19 | Header ...".
+    out = re.sub(r"(?m)^(\d{1,3})\s+(?!\|)", r"<sup>\1</sup> ", out)
     # Inline footnote markers attached to punctuation: "...strategies;6 " -> "...strategies;<sup>6</sup> "
     out = re.sub(r"([;:,\.\)])(\d{1,3})(?=\s)", r"\1<sup>\2</sup>", out)
     out = re.sub(r"\n{3,}", "\n\n", out)
@@ -385,6 +523,43 @@ def format_course_table_blocks(text: str) -> str:
     return replaced
 
 
+def fix_as_follows_bullet_lists(text: str) -> str:
+    lines = text.splitlines()
+    out = []
+    i = 0
+    strand_line_re = re.compile(r"^\s*(?:[-*]\s+)?([A-Z]\.\s+.+?)\s*(?:â€¢|•)?\s*$")
+
+    while i < len(lines):
+        out.append(lines[i])
+        trigger = lines[i].strip().lower().endswith("as follows:")
+        i += 1
+        if not trigger:
+            continue
+
+        while i < len(lines):
+            raw = lines[i]
+            stripped = raw.strip()
+
+            if not stripped:
+                out.append(raw)
+                i += 1
+                continue
+
+            # Stop at headings or table rows.
+            if stripped.startswith("#") or stripped.startswith("|"):
+                break
+
+            match = strand_line_re.match(raw)
+            if not match:
+                break
+
+            item = clean_line(match.group(1))
+            out.append(f"- {item}")
+            i += 1
+
+    return "\n".join(out)
+
+
 def remove_redundant_table_header_lines(text: str) -> str:
     if "|" not in text:
         return text
@@ -434,6 +609,12 @@ def remove_duplicate_markdown_table_headers(text: str) -> str:
         i += 1
 
     return "\n".join(out)
+
+
+def strip_footnote_prefix_from_table_rows(text: str) -> str:
+    # Footnote markers sometimes bleed into the first table row as:
+    # "<sup>19</sup> | ...", which breaks markdown table parsing.
+    return re.sub(r"(?m)^<sup>\d{1,3}</sup>\s+(?=\|)", "", text)
 
 
 def stitch_orphan_continuations(text: str) -> str:
@@ -677,7 +858,7 @@ def lines_to_paragraphs(lines: list[dict]) -> list[str]:
     return paragraphs
 
 
-def page_blocks(page, y_min=None, y_max=None):
+def page_blocks(page, y_min=None, y_max=None, margin_noise_profile=None):
     top = 0.0 if y_min is None else max(0.0, float(y_min) + 0.5)
     bottom = float(page.rect.height) if y_max is None else float(y_max)
     if bottom <= top:
@@ -706,6 +887,27 @@ def page_blocks(page, y_min=None, y_max=None):
                     parts.append(text)
             text = clean_line(" ".join(parts))
             if text:
+                norm = normalize_match_text(text)
+                top_band = float(page.rect.height) * 0.10
+                bottom_band = float(page.rect.height) * 0.90
+                page_number_like = re.match(
+                    r"^\s*(?:page\s+)?\d{1,4}(?:\s*(?:/|of)\s*\d{1,4})?\s*$",
+                    text,
+                    flags=re.IGNORECASE,
+                ) is not None
+                is_top_noise = (
+                    margin_noise_profile is not None
+                    and y0 <= top_band
+                    and norm in margin_noise_profile.get("top", set())
+                )
+                is_bottom_noise = (
+                    margin_noise_profile is not None
+                    and y1 >= bottom_band
+                    and norm in margin_noise_profile.get("bottom", set())
+                )
+                is_page_footer = page_number_like and y1 >= bottom_band
+                if is_top_noise or is_bottom_noise or is_page_footer:
+                    continue
                 lines.append({"x0": x0, "y0": y0, "y1": y1, "text": text})
 
     if not lines and not tables:
@@ -827,6 +1029,7 @@ def write_outputs(
     conversion_mode: str,
 ):
     output_md_dir, output_rel_prefix = prepare_output_dirs(out_dir, conversion_mode)
+    margin_noise_profile = build_margin_noise_profile(doc)
 
     normalized = []
     for idx, item in enumerate(outline, start=1):
@@ -844,6 +1047,30 @@ def write_outputs(
             }
         )
 
+    # Preserve content that appears before the first detected heading
+    # (e.g., title pages, foreword, or top-of-page text before first TOC anchor).
+    if normalized:
+        first = normalized[0]
+        first_page = max(1, int(first.get("page_start", 1)))
+        first_y = first.get("y0")
+        has_preface_gap = first_page > 1
+        has_same_page_lead_in = first_page == 1 and first_y is not None and float(first_y) > 2.0
+        if has_preface_gap or has_same_page_lead_in:
+            normalized.insert(
+                0,
+                {
+                    "id": "h0",
+                    "level": 1,
+                    "title": "Front Matter",
+                    "page_start": 1,
+                    "source": "synthetic-front-matter",
+                    "y0": 0.0,
+                    "line_count": 0,
+                    "char_count": 0,
+                    "section_file": None,
+                },
+            )
+
     section_rows = []
     total_sections = len(normalized)
     for i, current in enumerate(normalized):
@@ -852,13 +1079,27 @@ def write_outputs(
         start = max(1, current["page_start"])
         has_next = i + 1 < len(normalized)
         next_entry = normalized[i + 1] if has_next else None
-        section_end_page = next_entry["page_start"] if has_next else doc.page_count
-        end = max(start, min(doc.page_count, section_end_page))
 
         current_y = current.get("y0")
         next_y = next_entry.get("y0") if has_next else None
         next_page = next_entry["page_start"] if has_next else None
         next_same_page = has_next and next_page == start
+
+        if has_next and next_page is not None:
+            if next_y is not None:
+                section_end_page = next_page
+            elif next_same_page:
+                # Ambiguous same-page boundary: keep current section empty rather than
+                # duplicating full-page content into multiple sections.
+                section_end_page = start - 1
+            else:
+                # Without an anchor on the next heading, stop before its start page
+                # to avoid cross-section full-page overlap.
+                section_end_page = next_page - 1
+        else:
+            section_end_page = doc.page_count
+
+        end = max(start - 1, min(doc.page_count, section_end_page))
 
         pages_text = []
         for page_no in range(start - 1, end):
@@ -875,7 +1116,7 @@ def write_outputs(
             else:
                 y_max = None
 
-            blocks = page_blocks(page, y_min=y_min, y_max=y_max)
+            blocks = page_blocks(page, y_min=y_min, y_max=y_max, margin_noise_profile=margin_noise_profile)
             if blocks:
                 pages_text.append("\n\n".join(blocks))
 
@@ -889,8 +1130,10 @@ def write_outputs(
         body = stitch_orphan_continuations(body)
         body = format_dot_leader_blocks(body)
         body = format_course_table_blocks(body)
+        body = fix_as_follows_bullet_lists(body)
         body = remove_redundant_table_header_lines(body)
         body = remove_duplicate_markdown_table_headers(body)
+        body = strip_footnote_prefix_from_table_rows(body)
         section_rows.append(
             {
                 "index": i,
@@ -1120,6 +1363,8 @@ def main():
 
     print("PROGRESS: Detecting headings", flush=True)
     outline = build_outline_from_toc(doc)
+    if outline:
+        outline = infer_toc_heading_positions(doc, outline)
     if not outline:
         print("PROGRESS: No embedded TOC found; using text heuristics", flush=True)
         outline = build_outline_heuristic(doc)
