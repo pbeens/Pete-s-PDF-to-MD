@@ -1,0 +1,29 @@
+[
+  {
+    "id": "CLI-01",
+    "name": "Phase 1 sections run succeeds and writes required indexes",
+    "type": "phase1_success",
+    "fixture": "tests/pdfs/Science SNC1W.pdf",
+    "mode": "sections"
+  },
+  {
+    "id": "CLI-02",
+    "name": "Unsupported engine is rejected",
+    "type": "unsupported_engine",
+    "fixture": "tests/pdfs/Science SNC1W.pdf"
+  },
+  {
+    "id": "OUT-01",
+    "name": "Single mode creates one root markdown plus indexes",
+    "type": "single_shape",
+    "fixture": "tests/pdfs/Science SNC1W.pdf",
+    "mode": "single"
+  },
+  {
+    "id": "TOC-001",
+    "name": "Dot-leader TOC is reconstructed as a markdown table",
+    "type": "dot_leader_table",
+    "fixture": "tests/pdfs/Science SNC1W.pdf",
+    "mode": "sections"
+  }
+]

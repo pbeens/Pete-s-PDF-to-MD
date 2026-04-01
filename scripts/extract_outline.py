@@ -63,6 +63,14 @@ def normalize_match_text(value: str) -> str:
     return clean_line(value)
 
 
+def normalize_margin_noise_text(value: str) -> str:
+    text = clean_line(str(value or ""))
+    text = re.sub(r"^\d{1,3}\s+", "", text)
+    text = re.sub(r"\s+\d{1,3}$", "", text)
+    text = re.sub(r"(?i)^page\s+\d{1,4}\s*", "", text)
+    return normalize_match_text(text)
+
+
 def repair_mojibake(text: str) -> str:
     replacements = {
         "ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢": "â€¢",
@@ -93,7 +101,7 @@ def normalize_outline(outline: list[dict]) -> list[dict]:
     last_page = 1
 
     for item in outline:
-        title = clean_line(item.get("title", ""))
+        title = repair_mojibake(clean_line(item.get("title", "")))
         if not title:
             continue
         title_norm = normalize_match_text(title)
@@ -126,10 +134,53 @@ def normalize_outline(outline: list[dict]) -> list[dict]:
     return cleaned
 
 
+def infer_document_title(doc, input_path: Path) -> str:
+    try:
+        page = doc.load_page(0)
+    except Exception:
+        return input_path.stem.replace("-", " ")
+
+    payload = page.get_text("dict")
+    top_limit = float(page.rect.height) * 0.28
+    rows = []
+    for block in payload.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            bb = line.get("bbox", [0, 0, 0, 0])
+            y0 = float(bb[1])
+            if y0 > top_limit:
+                continue
+            parts = []
+            for span in line.get("spans", []):
+                text = clean_line(span.get("text", ""))
+                if text:
+                    parts.append(text)
+            merged = repair_mojibake(clean_line(" ".join(parts)))
+            if len(merged) >= 12:
+                rows.append((y0, merged))
+
+    if not rows:
+        return input_path.stem.replace("-", " ")
+
+    rows.sort(key=lambda item: item[0])
+    title_parts = []
+    for _, text in rows[:3]:
+        if not title_parts:
+            title_parts.append(text)
+            continue
+        if len(" ".join(title_parts + [text])) <= 140:
+            title_parts.append(text)
+        else:
+            break
+
+    return clean_line(" ".join(title_parts)) or input_path.stem.replace("-", " ")
+
+
 def build_margin_noise_profile(doc):
     top_counts = {}
     bottom_counts = {}
-    min_repeat = max(3, int(math.ceil(doc.page_count * 0.15)))
+    min_repeat = max(2, int(math.ceil(doc.page_count * 0.15)))
 
     for page_no in range(1, doc.page_count + 1):
         page = doc.load_page(page_no - 1)
@@ -154,7 +205,7 @@ def build_margin_noise_profile(doc):
                 bbox = line.get("bbox", [0, 0, 0, 0])
                 y0 = float(bbox[1])
                 y1 = float(bbox[3])
-                norm = normalize_match_text(merged)
+                norm = normalize_margin_noise_text(merged)
                 if not norm:
                     continue
 
@@ -722,6 +773,12 @@ def strip_remaining_bullet_glyphs(text: str) -> str:
     return out
 
 
+def detach_trailing_text_from_table_rows(text: str) -> str:
+    # Some PDFs bleed prose into the end of a markdown table row.
+    # Split the trailing prose back into a regular paragraph.
+    return re.sub(r"(?m)^(\|.*\|)[ \t]+([^|]+)$", r"\1\n\n\2", text)
+
+
 def deduplicate_body_paragraphs(text: str) -> str:
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     if not paragraphs:
@@ -973,7 +1030,7 @@ def lines_to_paragraphs(lines: list[dict]) -> list[str]:
     if not lines:
         return []
 
-    lines = sorted(lines, key=lambda item: (item["y0"], item["x0"]))
+    lines = list(lines)
     baseline_x = min(line["x0"] for line in lines)
     bullet_pattern = re.compile(r"^([•\-*]|\d+\.)\s+")
     paragraphs = []
@@ -1007,13 +1064,14 @@ def lines_to_paragraphs(lines: list[dict]) -> list[str]:
         gap = line["y0"] - prev["y1"]
         indent_delta = line["x0"] - baseline_x
         prev_indent_delta = prev["x0"] - baseline_x
+        y_reset = line["y0"] < (prev["y0"] - 2.0)
         continuation_of_bullet = (
             current_is_bullet
             and not bullet
             and indent_delta >= (prev_indent_delta - 1.0)
             and gap <= 10.0
         )
-        starts_new = (gap > 4.0 and not continuation_of_bullet) or bullet or (
+        starts_new = y_reset or (gap > 4.0 and not continuation_of_bullet) or bullet or (
             indent_delta - prev_indent_delta > 8.0 and not continuation_of_bullet
         )
 
@@ -1027,6 +1085,135 @@ def lines_to_paragraphs(lines: list[dict]) -> list[str]:
 
     flush()
     return paragraphs
+
+
+def order_lines_for_column_layout(lines: list[dict], page_width: float) -> list[dict]:
+    if len(lines) < 10:
+        return sorted(lines, key=lambda item: (item["y0"], item["x0"]))
+
+    sorted_lines = sorted(lines, key=lambda item: (item["y0"], item["x0"]))
+    narrow_lines = [
+        line for line in sorted_lines if float(line["x1"] - line["x0"]) <= (page_width * 0.62)
+    ]
+    if len(narrow_lines) < 6:
+        return sorted_lines
+
+    threshold = max(18.0, page_width * 0.08)
+    clusters: list[dict] = []
+    for line in sorted(narrow_lines, key=lambda item: item["x0"]):
+        x0 = float(line["x0"])
+        if not clusters:
+            clusters.append({"center": x0, "count": 1})
+            continue
+        nearest_idx = min(range(len(clusters)), key=lambda idx: abs(x0 - clusters[idx]["center"]))
+        nearest = clusters[nearest_idx]
+        if abs(x0 - nearest["center"]) <= threshold:
+            next_count = int(nearest["count"]) + 1
+            nearest["center"] = (nearest["center"] * nearest["count"] + x0) / next_count
+            nearest["count"] = next_count
+        else:
+            clusters.append({"center": x0, "count": 1})
+
+    min_cluster_count = max(3, int(len(narrow_lines) * 0.12))
+    clusters = [cluster for cluster in clusters if int(cluster["count"]) >= min_cluster_count]
+    if len(clusters) < 2:
+        return sorted_lines
+
+    # Use the two strongest x-clusters and read left column fully before right column.
+    clusters = sorted(clusters, key=lambda cluster: cluster["count"], reverse=True)[:2]
+    clusters = sorted(clusters, key=lambda cluster: cluster["center"])
+    column_centers = [float(cluster["center"]) for cluster in clusters]
+    if (column_centers[1] - column_centers[0]) < (page_width * 0.18):
+        return sorted_lines
+
+    column_lines = {0: [], 1: []}
+    top_full_width = []
+    mid_full_width = []
+    bottom_full_width = []
+
+    non_full = [line for line in sorted_lines if float(line["x1"] - line["x0"]) < (page_width * 0.72)]
+    if not non_full:
+        return sorted_lines
+    min_col_y = min(float(line["y0"]) for line in non_full)
+    max_col_y = max(float(line["y0"]) for line in non_full)
+
+    for line in sorted_lines:
+        width = float(line["x1"] - line["x0"])
+        if width >= (page_width * 0.72):
+            if float(line["y0"]) < (min_col_y - 4.0):
+                top_full_width.append(line)
+            elif float(line["y0"]) > (max_col_y + 4.0):
+                bottom_full_width.append(line)
+            else:
+                mid_full_width.append(line)
+            continue
+
+        nearest_idx = 0 if abs(float(line["x0"]) - column_centers[0]) <= abs(float(line["x0"]) - column_centers[1]) else 1
+        column_lines[nearest_idx].append(line)
+
+    ordered = []
+    ordered.extend(sorted(top_full_width, key=lambda item: (item["y0"], item["x0"])))
+    ordered.extend(sorted(column_lines[0], key=lambda item: (item["y0"], item["x0"])))
+    ordered.extend(sorted(mid_full_width, key=lambda item: (item["y0"], item["x0"])))
+    ordered.extend(sorted(column_lines[1], key=lambda item: (item["y0"], item["x0"])))
+    ordered.extend(sorted(bottom_full_width, key=lambda item: (item["y0"], item["x0"])))
+    return ordered if ordered else sorted_lines
+
+
+def detect_column_centers(lines: list[dict], page_width: float) -> list[float]:
+    if len(lines) < 10:
+        return []
+    sorted_lines = sorted(lines, key=lambda item: (item["y0"], item["x0"]))
+    narrow_lines = [
+        line for line in sorted_lines if float(line["x1"] - line["x0"]) <= (page_width * 0.62)
+    ]
+    if len(narrow_lines) < 6:
+        return []
+
+    threshold = max(18.0, page_width * 0.08)
+    clusters: list[dict] = []
+    for line in sorted(narrow_lines, key=lambda item: item["x0"]):
+        x0 = float(line["x0"])
+        if not clusters:
+            clusters.append({"center": x0, "count": 1})
+            continue
+        nearest_idx = min(range(len(clusters)), key=lambda idx: abs(x0 - clusters[idx]["center"]))
+        nearest = clusters[nearest_idx]
+        if abs(x0 - nearest["center"]) <= threshold:
+            next_count = int(nearest["count"]) + 1
+            nearest["center"] = (nearest["center"] * nearest["count"] + x0) / next_count
+            nearest["count"] = next_count
+        else:
+            clusters.append({"center": x0, "count": 1})
+
+    min_cluster_count = max(3, int(len(narrow_lines) * 0.12))
+    clusters = [cluster for cluster in clusters if int(cluster["count"]) >= min_cluster_count]
+    if len(clusters) < 2:
+        return []
+
+    clusters = sorted(clusters, key=lambda cluster: cluster["count"], reverse=True)[:2]
+    centers = sorted(float(cluster["center"]) for cluster in clusters)
+    if (centers[1] - centers[0]) < (page_width * 0.18):
+        return []
+    return centers
+
+
+def emit_column_blocks(column_lines: list[dict], column_tables: list[dict]) -> list[str]:
+    out = []
+    lines = sorted(column_lines, key=lambda item: (item["y0"], item["x0"]))
+    tables = sorted(column_tables, key=lambda item: (item["y0"], item["x0"]))
+    li = 0
+    for table in tables:
+        pre = []
+        while li < len(lines) and lines[li]["y0"] < table["y0"]:
+            pre.append(lines[li])
+            li += 1
+        if pre:
+            out.extend(lines_to_paragraphs(pre))
+        out.append(table["md"])
+    if li < len(lines):
+        out.extend(lines_to_paragraphs(lines[li:]))
+    return out
 
 
 def page_blocks(page, y_min=None, y_max=None, margin_noise_profile=None):
@@ -1046,10 +1233,22 @@ def page_blocks(page, y_min=None, y_max=None, margin_noise_profile=None):
             x0, x1, y0, y1 = float(bbox[0]), float(bbox[2]), float(bbox[1]), float(bbox[3])
             if y1 <= top or y0 >= bottom:
                 continue
-            if any(
-                not (x1 <= tb["x0"] or x0 >= tb["x1"] or y1 <= tb["y0"] or y0 >= tb["y1"])
-                for tb in tables
-            ):
+            line_width = max(1.0, x1 - x0)
+            line_height = max(1.0, y1 - y0)
+
+            overlaps_table_text = False
+            for tb in tables:
+                inter_w = max(0.0, min(x1, tb["x1"]) - max(x0, tb["x0"]))
+                inter_h = max(0.0, min(y1, tb["y1"]) - max(y0, tb["y0"]))
+                if inter_w <= 0.0 or inter_h <= 0.0:
+                    continue
+                overlap_area_ratio = (inter_w * inter_h) / (line_width * line_height)
+                overlap_w_ratio = inter_w / line_width
+                overlap_h_ratio = inter_h / line_height
+                if overlap_area_ratio >= 0.45 or (overlap_w_ratio >= 0.6 and overlap_h_ratio >= 0.8):
+                    overlaps_table_text = True
+                    break
+            if overlaps_table_text:
                 continue
             parts = []
             for span in line.get("spans", []):
@@ -1058,7 +1257,7 @@ def page_blocks(page, y_min=None, y_max=None, margin_noise_profile=None):
                     parts.append(text)
             text = clean_line(" ".join(parts))
             if text:
-                norm = normalize_match_text(text)
+                norm = normalize_margin_noise_text(text)
                 top_band = float(page.rect.height) * 0.10
                 bottom_band = float(page.rect.height) * 0.90
                 page_number_like = re.match(
@@ -1079,10 +1278,50 @@ def page_blocks(page, y_min=None, y_max=None, margin_noise_profile=None):
                 is_page_footer = page_number_like and y1 >= bottom_band
                 if is_top_noise or is_bottom_noise or is_page_footer:
                     continue
-                lines.append({"x0": x0, "y0": y0, "y1": y1, "text": text})
+                lines.append({"x0": x0, "x1": x1, "y0": y0, "y1": y1, "text": text})
 
     if not lines and not tables:
         return []
+
+    page_width = float(page.rect.width)
+    if not tables:
+        ordered_lines = order_lines_for_column_layout(lines, page_width)
+        return [block for block in lines_to_paragraphs(ordered_lines) if clean_line(block)]
+
+    column_centers = detect_column_centers(lines, page_width)
+    if column_centers:
+        left_center, right_center = column_centers
+        left_lines = []
+        right_lines = []
+        full_lines = []
+        for line in lines:
+            width = float(line["x1"] - line["x0"])
+            if width >= (page_width * 0.72):
+                full_lines.append(line)
+                continue
+            target = left_lines if abs(float(line["x0"]) - left_center) <= abs(float(line["x0"]) - right_center) else right_lines
+            target.append(line)
+
+        left_tables = []
+        right_tables = []
+        full_tables = []
+        for tb in tables:
+            tb_width = float(tb["x1"] - tb["x0"])
+            if tb_width >= (page_width * 0.72):
+                full_tables.append(tb)
+                continue
+            tb_x = float(tb["x0"])
+            target = left_tables if abs(tb_x - left_center) <= abs(tb_x - right_center) else right_tables
+            target.append(tb)
+
+        blocks = []
+        if full_lines:
+            blocks.extend(lines_to_paragraphs(sorted(full_lines, key=lambda item: (item["y0"], item["x0"]))))
+        for tb in sorted(full_tables, key=lambda item: (item["y0"], item["x0"])):
+            blocks.append(tb["md"])
+        blocks.extend(emit_column_blocks(left_lines, left_tables))
+        blocks.extend(emit_column_blocks(right_lines, right_tables))
+        return [block for block in blocks if clean_line(block)]
 
     lines = sorted(lines, key=lambda item: (item["y0"], item["x0"]))
     output_blocks = []
@@ -1092,13 +1331,13 @@ def page_blocks(page, y_min=None, y_max=None, margin_noise_profile=None):
         while li < len(lines) and lines[li]["y0"] < table["y0"]:
             pre_lines.append(lines[li])
             li += 1
-        output_blocks.extend(lines_to_paragraphs(pre_lines))
+        ordered_pre_lines = order_lines_for_column_layout(pre_lines, page_width)
+        output_blocks.extend(lines_to_paragraphs(ordered_pre_lines))
         output_blocks.append(table["md"])
-        while li < len(lines) and lines[li]["y0"] < table["y1"]:
-            li += 1
 
     if li < len(lines):
-        output_blocks.extend(lines_to_paragraphs(lines[li:]))
+        ordered_tail_lines = order_lines_for_column_layout(lines[li:], page_width)
+        output_blocks.extend(lines_to_paragraphs(ordered_tail_lines))
 
     return [block for block in output_blocks if clean_line(block)]
 
@@ -1140,6 +1379,28 @@ def cleanup_section_body(body: str, title: str, next_title: str | None = None) -
     out = re.sub(r"(?im)^\W*extract\s+\d+\s*", "", out)
 
     paragraphs = [p.strip() for p in out.split("\n\n") if p.strip()]
+    if not paragraphs:
+        return "(No extractable text in this range.)"
+
+    title_norm = normalize_match_text(title)
+    cleaned = []
+    for para in paragraphs:
+        para_norm = normalize_match_text(para)
+        # Drop running headers/footers such as "... Affiliates 3".
+        if re.search(r"\baffiliates\s+\d{1,3}\s*$", para, flags=re.IGNORECASE):
+            continue
+        # Drop page-header variants that prepend page numbers.
+        if re.match(r"^\d{1,3}\s+[A-Z].{20,}$", para):
+            continue
+        # Drop short repeated cover/header strings that mirror the section title.
+        if title_norm and len(para.split()) <= 35 and (
+            para_norm == title_norm
+            or para_norm.startswith(title_norm)
+            or title_norm.startswith(para_norm)
+        ):
+            continue
+        cleaned.append(para)
+    paragraphs = cleaned
     if not paragraphs:
         return "(No extractable text in this range.)"
 
@@ -1198,6 +1459,7 @@ def write_outputs(
     max_section_chars: int,
     include_section_metadata: bool,
     conversion_mode: str,
+    emit_generated_toc: bool = False,
 ):
     output_md_dir, output_rel_prefix = prepare_output_dirs(out_dir, conversion_mode)
     margin_noise_profile = build_margin_noise_profile(doc)
@@ -1306,6 +1568,7 @@ def write_outputs(
         body = remove_redundant_table_header_lines(body)
         body = remove_duplicate_markdown_table_headers(body)
         body = strip_footnote_prefix_from_table_rows(body)
+        body = detach_trailing_text_from_table_rows(body)
         body = split_inline_bullet_runs(body)
         body = strip_remaining_bullet_glyphs(body)
         body = strip_inline_sup_markers(body)
@@ -1460,7 +1723,7 @@ def write_outputs(
 
         chunk_markdown = []
         toc_table = build_toc_markdown_table(section_rows)
-        if toc_table:
+        if emit_generated_toc and toc_table:
             chunk_markdown.append(toc_table.strip())
         total_chars = 0
         page_start = section_rows[0]["start"] if section_rows else 1
@@ -1544,6 +1807,7 @@ def main():
 
     print("PROGRESS: Detecting headings", flush=True)
     outline = build_outline_from_toc(doc)
+    has_embedded_toc = bool(outline)
     if outline:
         outline = infer_toc_heading_positions(doc, outline)
     if not outline:
@@ -1551,6 +1815,15 @@ def main():
         outline = build_outline_heuristic(doc)
     if not outline:
         outline = [{"level": 1, "title": "Document", "page_start": 1, "source": "fallback"}]
+    elif args.conversion_mode == "single" and all(item.get("source") == "text-heuristic" for item in outline):
+        outline = [
+            {
+                "level": 1,
+                "title": infer_document_title(doc, input_path),
+                "page_start": 1,
+                "source": "single-fallback",
+            }
+        ]
     outline = normalize_outline(outline)
 
     base = input_path.stem
@@ -1563,6 +1836,7 @@ def main():
         args.max_section_chars,
         bool(args.include_section_metadata),
         args.conversion_mode,
+        emit_generated_toc=has_embedded_toc,
     )
     print("PROGRESS: Finalizing output indexes", flush=True)
 

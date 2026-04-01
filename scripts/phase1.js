@@ -38,14 +38,14 @@ function parseArgs(argv) {
   }
 
   if (!opts.input) {
-    const defaultPdf = findFirstPdf(path.join(process.cwd(), 'test-data', 'pdfs'));
+    const defaultPdf = findFirstPdf(path.join(process.cwd(), 'tests', 'pdfs'));
     if (defaultPdf) {
       opts.input = defaultPdf;
     }
   }
 
   if (!opts.input) {
-    throw new Error('No input PDF provided and none found in test-data/pdfs.');
+    throw new Error('No input PDF provided and none found in tests/pdfs.');
   }
 
   return opts;

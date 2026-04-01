@@ -1,0 +1,207 @@
+[
+  {
+    "id": "EXTRACT-001",
+    "name": "Column reading order is preserved for mixed text/table layouts",
+    "fromVersion": "0.7.2",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs a fixture with known two-column mixed layout and expected reading-order assertions."
+  },
+  {
+    "id": "EXTRACT-002",
+    "name": "Text near table boundaries is preserved unless overlap is significant",
+    "fromVersion": "0.7.2",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs fixture and expected near-table text anchors."
+  },
+  {
+    "id": "TABLE-001",
+    "name": "Markdown table rows remain structurally valid",
+    "fromVersion": "0.7.2",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs table-focused fixture set and table-shape assertions."
+  },
+  {
+    "id": "PARA-001",
+    "name": "Paragraph stitching does not merge across column resets",
+    "fromVersion": "0.7.2",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs fixture with known column break points."
+  },
+  {
+    "id": "SINGLE-001",
+    "name": "Single mode does not inject a generated top-level TOC when PDF has no embedded TOC",
+    "fromVersion": "0.7.2",
+    "priority": "smoke",
+    "automation": "automated",
+    "fixture": "tests/pdfs/Science SNC1W.pdf",
+    "check": "single_no_generated_toc"
+  },
+  {
+    "id": "SINGLE-002",
+    "name": "Single mode fallback emits one document-level heading for no-TOC PDFs",
+    "fromVersion": "0.7.2",
+    "priority": "smoke",
+    "automation": "automated",
+    "fixture": "tests/pdfs/Science SNC1W.pdf",
+    "check": "single_one_heading_fallback"
+  },
+  {
+    "id": "NOISE-001",
+    "name": "Recurring running headers/footers are filtered",
+    "fromVersion": "0.7.2",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs fixture-specific string blacklist assertions."
+  },
+  {
+    "id": "TOC-002",
+    "name": "TOC heading y-anchors are inferred when embedded TOC positions are missing",
+    "fromVersion": "0.7.1",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs fixture with embedded TOC but missing positional anchors."
+  },
+  {
+    "id": "BOUNDARY-001",
+    "name": "Ambiguous same-page heading boundaries do not overlap content",
+    "fromVersion": "0.7.1",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs fixture and section-boundary overlap assertions."
+  },
+  {
+    "id": "FRONT-001",
+    "name": "Front matter is preserved before first detected heading",
+    "fromVersion": "0.7.1",
+    "priority": "smoke",
+    "automation": "automated",
+    "fixture": "tests/pdfs/Science SNC1W.pdf",
+    "check": "front_matter_present"
+  },
+  {
+    "id": "POST-001",
+    "name": "Table-leading row numbers are not converted to footnote superscripts",
+    "fromVersion": "0.7.1",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs fixture with numbered table row starts."
+  },
+  {
+    "id": "POST-002",
+    "name": "\"as follows:\" strand lines are converted to markdown bullets",
+    "fromVersion": "0.7.1",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs fixture containing target phrase."
+  },
+  {
+    "id": "POST-003",
+    "name": "Stray <sup>n</sup> table-row prefixes are removed",
+    "fromVersion": "0.7.1",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs fixture with known problematic superscript prefixes."
+  },
+  {
+    "id": "MODE-001",
+    "name": "All conversion modes generate expected layout",
+    "fromVersion": "0.7.0",
+    "priority": "smoke",
+    "automation": "automated",
+    "fixture": "tests/pdfs/Science SNC1W.pdf",
+    "check": "conversion_mode_layout"
+  },
+  {
+    "id": "MODE-002",
+    "name": "Single-mode output filename matches PDF basename",
+    "fromVersion": "0.7.0",
+    "priority": "smoke",
+    "automation": "automated",
+    "fixture": "tests/pdfs/Science SNC1W.pdf",
+    "check": "single_filename_matches_pdf"
+  },
+  {
+    "id": "LOCK-001",
+    "name": "Locked output file reports clear lock error without full-tree deletion",
+    "fromVersion": "0.6.0",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs deterministic lock simulation on Windows."
+  },
+  {
+    "id": "ERR-001",
+    "name": "Invalid/corrupt PDF returns clear error message",
+    "fromVersion": "0.6.0",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs dedicated corrupt fixture and message assertions."
+  },
+  {
+    "id": "PY-001",
+    "name": "Python/PyMuPDF detection honors override env vars",
+    "fromVersion": "0.5.0",
+    "priority": "regression",
+    "automation": "pending",
+    "notes": "Needs controlled multi-interpreter test environment."
+  },
+  {
+    "id": "PKG-001",
+    "name": "Packaged app script path resolution avoids spawn ENOTDIR",
+    "fromVersion": "0.5.0",
+    "priority": "release",
+    "automation": "manual",
+    "notes": "Packaged-app integration check."
+  },
+  {
+    "id": "PKG-002",
+    "name": "Windows packaged conversion launches without console window",
+    "fromVersion": "0.6.0",
+    "priority": "release",
+    "automation": "manual",
+    "notes": "Requires packaged Windows app runtime."
+  },
+  {
+    "id": "GUI-001",
+    "name": "Section hint auto-hides when not applicable",
+    "fromVersion": "0.7.1",
+    "priority": "regression",
+    "automation": "manual",
+    "notes": "GUI behavior check."
+  },
+  {
+    "id": "GUI-002",
+    "name": "Section pane resets scroll to top on section change",
+    "fromVersion": "0.6.0",
+    "priority": "regression",
+    "automation": "manual",
+    "notes": "GUI behavior check."
+  },
+  {
+    "id": "GUI-003",
+    "name": "Drag/drop path normalization supports file URI and Windows path variants",
+    "fromVersion": "0.6.0",
+    "priority": "regression",
+    "automation": "manual",
+    "notes": "GUI behavior check."
+  },
+  {
+    "id": "GUI-004",
+    "name": "Drag/drop rejects invalid payloads cleanly",
+    "fromVersion": "0.6.0",
+    "priority": "regression",
+    "automation": "manual",
+    "notes": "GUI behavior check."
+  },
+  {
+    "id": "OUT-001",
+    "name": "Legacy multi-part outputs remain readable in section viewer",
+    "fromVersion": "0.6.0",
+    "priority": "regression",
+    "automation": "manual",
+    "notes": "Requires legacy output fixtures and GUI section viewer validation."
+  }
+]

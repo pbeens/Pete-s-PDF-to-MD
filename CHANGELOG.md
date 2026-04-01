@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.2] - 2026-03-21
+
+### Changed
+
+- Release version baseline set to `v0.7.2`.
+- Single-file output no longer injects a generated top-level Table of Contents when the source PDF has no embedded TOC.
+- For single-file conversion without embedded PDF TOC, heading fallback now emits one document-level heading instead of noisy heuristic heading splits.
+- Margin-noise normalization improved for short PDFs so recurring running headers/footers are filtered more reliably.
+
+### Fixed
+
+- Columnar PDF extraction now preserves reading order for mixed text/table layouts by processing text and tables per column instead of interleaving by global `y` position.
+- Text near table boundaries is no longer dropped by broad table-range skipping; only significant line/table overlap is filtered.
+- Table rendering corruption from malformed row splitting was fixed so markdown tables remain valid and render correctly.
+- Paragraph stitching no longer merges across column resets, reducing out-of-order content in two-column documents.
+
 ## [0.7.1] - 2026-03-20
 
 ### Added

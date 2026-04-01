@@ -1,11 +1,14 @@
 # macOS metadata
 .DS_Store
 
-# Local test assets (PDFs and generated artifacts)
-test-data/**
-!test-data/
-!test-data/pdfs/
-!test-data/pdfs/.gitkeep
+# Local test assets and generated test artifacts
+tests/**
+!tests/
+!tests/TEST_PLAN.md
+!tests/cases/
+!tests/cases/*.json
+!tests/pdfs/
+!tests/pdfs/.gitkeep
 
 # Generated outputs
 output/
